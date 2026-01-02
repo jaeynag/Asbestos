@@ -277,3 +277,35 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
 
 
 
+
+
+
+
+/* ===== 모바일: 날짜 입력칸 옆에 버튼(강제) ===== */
+/* 기존 CSS가 깨졌거나 다른 규칙이 덮어쓰는 경우를 대비해서 '파일 맨 아래'에서 강하게 재정의 */
+.dateControls{
+  display:flex;
+  align-items:stretch;
+  gap:8px;
+}
+.dateControls .dateCol{
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.dateControls > .btn{
+  flex: 0 0 auto;
+  width: auto;
+  white-space: nowrap;
+}
+
+@media (max-width: 520px){
+  .dateControls{
+    flex-wrap: nowrap !important;
+  }
+  .dateControls .dateCol{
+    flex-basis: auto !important;
+  }
+  .dateControls > .btn{
+    width: auto !important;
+  }
+}
