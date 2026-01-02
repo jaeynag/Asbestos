@@ -203,134 +203,53 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   flex-wrap:nowrap;
 }
 @media (max-width: 520px){
-  .sampleRight.scatter{ flex-wrap:wrap; }
-}
-
-/* 농도: 1개라서 inline 라벨+썸네일 */
-.slotMini.density{
-  display:flex;
-  flex-direction:column;
-  align-items:flex-end;
-  gap:8px;
-}
-.slotMini.density .slotInline{
-  display:flex;
-  align-items:center;
-  gap:10px;
-}
-
-/* 농도 inline 라벨은 오른쪽 정렬 (닷+텍스트가 썸네일 왼쪽) */
-.slotMini.density .slotHead{
-  display:flex;
-  align-items:center;
-  justify-content:flex-end;
-  gap:6px;
-  min-width:88px; /* 라벨 폭 확보 */
-}
-
-/* 비산: 각 슬롯을 같은 폭으로 잡아서 2개가 예쁘게 나란히 */
-.slotMini.scatter{
-  display:flex;
-  flex-direction:column;
-  align-items:flex-end;
-  gap:6px;
-  width: 168px;       /* 여기 숫자 조절하면 2개 배치 느낌 바뀜 */
-}
-
-/* 썸네일 크기: 스샷 느낌으로 조금 키움 */
-.thumbMini{
-  width: 104px;
-  height: 64px;
-  border-radius:10px;
-  border:1px dashed var(--line);
-  background:#fafbfc;
-  overflow:hidden;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  font-size:11px;
-  color:var(--muted);
-}
-.thumbMini img{ width:100%; height:100%; object-fit:cover; }
-
-/* 버튼도 너무 길어지지 않게 */
-.slotBtns{
-  display:flex;
-  gap:6px;
-  justify-content:flex-end;
-}
-.btn.small{
-  padding:7px 10px;
-  font-size:13px;
-}
-
-/* sampleRow가 너무 커지지 않게 상하 여백 살짝 줄임 */
-.sampleRow{
-  padding-top:10px;
-  padding-bottom:10px;
-}
-.sampleMeta{ gap:6px; }
-
-
-/* ===== 날짜 컨트롤: 겹침 방지 ===== */
-.dateControls{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
-.dateControls .dateCol{ flex:1; min-width: 220px; }
-
-/* ===== Modal ===== */
-.modal{ position:fixed; inset:0; display:flex; align-items:center; justify-content:center; padding:16px; z-index:50; }
-.modal[hidden]{ display:none; }
-.modal-backdrop{ position:absolute; inset:0; background:rgba(0,0,0,.5); }
-.modal-card{ position:relative; width:min(720px, 100%); background:#fff; border-radius:14px; border:1px solid var(--line); overflow:hidden; }
-.modal-head{ padding:12px 12px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--line); }
-.modal-title{ font-weight:800; }
-.modal-body{ padding:12px; display:flex; flex-direction:column; gap:10px; }
-.modal-preview{ width:100%; max-height:60vh; object-fit:contain; border-radius:10px; border:1px solid var(--line); background:#fafbfc; }
-.modal-meta{ font-size:12px; color:var(--muted); }
-.modal-actions{ padding:12px; display:flex; gap:10px; justify-content:flex-end; border-top:1px solid var(--line); }
-
-/* ===== Viewer modal ===== */
-.viewer-card{ width:min(900px, 100%); }
-.viewer-head-left{ display:flex; flex-direction:column; gap:4px; }
-.viewer-label{ font-size:12px; color:var(--muted); }
-.viewer-head-right{ display:flex; gap:8px; }
-
-.viewer-body{
-  position:relative;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  gap:10px;
-  padding:12px;
-}
-.viewer-img{
-  width:100%;
-  max-height:70vh;
-  object-fit:contain;
-  border-radius:12px;
-  border:1px solid var(--line);
-  background:#fafbfc;
-}
-.viewer-img.zoom2{ transform: scale(1.8); transform-origin:center; }
-.viewer-nav{
-  width:40px; height:40px;
-  border-radius:999px;
-  border:1px solid var(--line);
-  background:#fff;
-  color:#111;
-  font-size:26px;
-  line-height:38px;
-  cursor:pointer;
-}
-.viewer-nav:disabled{ opacity:.35; cursor:not-allowed; }
-
-@media (max-width: 520px){
   .root{ padding: 0 12px 14px; }
   .topbar{ padding:12px 12px 8px; }
-  .sampleLeft{ min-width:0; flex-basis:100%; }
-  .sampleRight{ width:100%; }
-  .timeInput{ width: 110px; }
-  .thumbMini{ width: 84px; height: 52px; }
+
+  /* 입력/텍스트 영역이 잘리지 않게 */
+  .sampleLeft{ min-width:0; }
+  .timeInput{ width: 108px; }
+
+  /* 비산(2칸): 스샷처럼 오른쪽 사진영역을 같은 줄에 유지 */
+  .sampleRow.mode-scatter{
+    flex-wrap:nowrap;
+    align-items:flex-start;
+  }
+  .sampleRow.mode-scatter .sampleLeft{
+    flex:1 1 auto;
+    min-width:0;
+  }
+  .sampleRow.mode-scatter .sampleRight{
+    flex:0 0 auto;
+    width:auto;
+  }
+  .sampleRow.mode-scatter .sampleRight.scatter{
+    flex-wrap:nowrap;
+    gap:10px;
+  }
+  .sampleRow.mode-scatter .slotMini.scatter{
+    width: 132px;
+  }
+  .sampleRow.mode-scatter .thumbMini{
+    width: 92px;
+    height: 56px;
+  }
+  .sampleRow.mode-scatter .slotBtns .btn.small{
+    padding:6px 8px;
+    font-size:12px;
+  }
+
+  /* 농도(1칸): 썸네일만 살짝 축소 */
+  .sampleRow.mode-density .thumbMini{
+    width: 88px;
+    height: 54px;
+  }
+
+  /* 날짜 컨트롤 */
   .dateControls .dateCol{ min-width: 0; flex-basis: 100%; }
   .dateControls .btn{ width:100%; }
+
+  /* 뷰어 버튼 */
   .viewer-nav{ width:34px; height:34px; font-size:22px; line-height:32px; }
 }
+
