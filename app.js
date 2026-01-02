@@ -23,6 +23,23 @@ function normEmail(v) {
   return String(v || "").trim().toLowerCase();
 }
 
+async function emailExists(email) {
+  try {
+    const e = normEmail(email);
+    const { data, error } = await supabase.rpc("email_exists", { p_email: e });
+    if (error) {
+      // RPC가 없거나 권한이 막혀있으면 앱에서는 막지 않습니다.
+      console.warn("email_exists RPC를 사용할 수 없습니다:", error);
+      return null;
+    }
+    return !!data;
+  } catch (e) {
+    console.warn("email_exists 확인에 실패했습니다:", e);
+    return null;
+  }
+}
+
+
 function el(tag, attrs = {}, children = []) {
   const n = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -78,11 +95,113 @@ const state = {
   },
 };
 
-// top buttons
+// root + header
 const root = document.getElementById("root");
-const btnSignOut = document.getElementById("btnSignOut");
-const btnChangeMode = document.getElementById("btnChangeMode");
-const btnChangeCompany = document.getElementById("btnChangeCompany");
+const btnBack = document.getElementById("btnBack");
+const btnGear = document.getElementById("btnGear");
+const settingsMenu = document.getElementById("settingsMenu");
+const menuChangeMode = document.getElementById("menuChangeMode");
+const menuChangeCompany = document.getElementById("menuChangeCompany");
+const menuSignOut = document.getElementById("menuSignOut");
+
+function closeSettings() {
+  settingsMenu.hidden = true;
+}
+function toggleSettings() {
+  settingsMenu.hidden = !settingsMenu.hidden;
+}
+
+document.addEventListener("click", (ev) => {
+  if (settingsMenu.hidden) return;
+  const t = ev.target;
+  if (t === btnGear || btnGear.contains(t)) return;
+  if (settingsMenu.contains(t)) return;
+  closeSettings();
+});
+
+function updateHeader() {
+  const authed = !!state.user;
+  btnGear.style.display = authed ? "" : "none";
+  // 회사 선택 이후부터 뒤로가기 노출
+  btnBack.style.display = (authed && !!state.company) ? "" : "none";
+
+  menuChangeMode.disabled = !state.mode;
+  menuChangeCompany.disabled = !state.company;
+}
+
+function goBack() {
+  closeSettings();
+
+  // 열려있는 모달 우선 닫기
+  if (state.viewer?.open) {
+    closeViewer();
+    return;
+  }
+  if (!modal.hidden) {
+    closeModal();
+    return;
+  }
+
+  if (state.job) {
+    state.job = null;
+    state.addOpen = false;
+    render();
+    return;
+  }
+  if (state.mode) {
+    state.mode = null;
+    state.job = null;
+    state.addOpen = false;
+    render();
+    return;
+  }
+  if (state.company) {
+    state.company = null;
+    state.mode = null;
+    state.job = null;
+    state.addOpen = false;
+    render();
+    return;
+  }
+}
+
+btnBack?.addEventListener("click", goBack);
+btnGear?.addEventListener("click", toggleSettings);
+
+menuChangeMode?.addEventListener("click", () => {
+  if (!state.user) return;
+  closeSettings();
+  if (!state.mode) return;
+  if (!confirm("업무를 변경하시겠습니까?")) return;
+  state.mode = null;
+  state.job = null;
+  state.addOpen = false;
+  render();
+});
+
+menuChangeCompany?.addEventListener("click", () => {
+  if (!state.user) return;
+  closeSettings();
+  if (!state.company) return;
+  if (!confirm("회사를 변경하시겠습니까?")) return;
+  state.company = null;
+  state.mode = null;
+  state.job = null;
+  state.addOpen = false;
+  render();
+});
+
+menuSignOut?.addEventListener("click", async () => {
+  if (!state.user) return;
+  closeSettings();
+  await supabase.auth.signOut();
+  state.user = null;
+  state.company = null;
+  state.mode = null;
+  state.job = null;
+  state.addOpen = false;
+  render();
+});
 
 // modal
 const modal = document.getElementById("modal");
@@ -253,40 +372,8 @@ modalAccept.addEventListener("click", async () => {
 async function loadSession() {
   const { data } = await supabase.auth.getSession();
   state.user = data.session?.user || null;
-
-  const authed = !!state.user;
-  btnSignOut.style.display = authed ? "" : "none";
-  btnChangeMode.style.display = authed ? "" : "none";
-  btnChangeCompany.style.display = authed ? "" : "none";
+  updateHeader();
 }
-
-btnSignOut.addEventListener("click", async () => {
-  await supabase.auth.signOut();
-  state.user = null;
-  state.company = null;
-  state.mode = null;
-  state.job = null;
-  render();
-});
-
-btnChangeMode.addEventListener("click", () => {
-  if (!state.user) return;
-  if (!confirm("모드를 변경하시겠습니까?")) return;
-  state.mode = null;
-  state.job = null;
-  state.addOpen = false;
-  render();
-});
-
-btnChangeCompany.addEventListener("click", () => {
-  if (!state.user) return;
-  if (!confirm("회사를 변경하시겠습니까?")) return;
-  state.company = null;
-  state.mode = null;
-  state.job = null;
-  state.addOpen = false;
-  render();
-});
 
 async function signIn(email, password) {
   const e = normEmail(email);
@@ -297,6 +384,11 @@ async function signIn(email, password) {
 
 async function signUp(email, password) {
   const e = normEmail(email);
+
+  const exists = await emailExists(e);
+  if (exists === true) {
+    throw new Error("이미 가입된 이메일입니다. 다른 이메일을 사용해 주세요.");
+  }
   // 보안/설정에 따라 이미 가입된 이메일이어도 성공처럼 응답할 수 있습니다.
   // 따라서 앱에서는 '가입 완료'가 아니라 '확인 메일 전송' 안내로 처리합니다.
   const { data, error } = await supabase.auth.signUp({
@@ -568,6 +660,8 @@ async function loadJob(job) {
    Render
 ========================= */
 function render() {
+  closeSettings();
+  updateHeader();
   root.innerHTML = "";
 
   if (!state.user) { renderAuth(); return; }
@@ -657,7 +751,7 @@ function renderCompanySelect() {
     try {
       setFoot("회사 목록을 불러오는 중입니다...");
       const companies = await fetchCompanies();
-      setFoot("회사를 선택해 주세요.");
+      setFoot("");
       list.innerHTML = "";
 
       if (!companies.length) {
@@ -674,8 +768,7 @@ function renderCompanySelect() {
         list.appendChild(el("div", { class: "item" }, [
           el("div", { class: "col" }, [
             el("div", { class: "item-title", text: c.name }),
-            el("div", { class: "item-sub", text: c.id }),
-          ]),
+                      ]),
           el("button", {
             class: "btn primary small",
             text: "선택",
@@ -698,9 +791,9 @@ function renderCompanySelect() {
 /* ===== Mode ===== */
 function renderModeSelect() {
   root.appendChild(el("section", { class: "card" }, [
-    el("div", { class: "label", text: "모드 선택" }),
+    el("div", { class: "label", text: "업무 선택" }),
     el("div", { class: "row", style: "margin-top:10px;" }, [
-      el("button", { class: "btn primary", text: "농도", onclick: () => { state.mode = "density"; state.job = null; render(); } }),
+      el("button", { class: "btn", text: "농도", onclick: () => { state.mode = "density"; state.job = null; render(); } }),
       el("button", { class: "btn", text: "비산", onclick: () => { state.mode = "scatter"; state.job = null; render(); } }),
     ])
   ]));
@@ -715,20 +808,20 @@ function renderJobSelect() {
   root.appendChild(el("section", { class: "card" }, [
     el("div", { class: "row space" }, [
       el("div", { class: "col", style: "flex:1; min-width:220px;" }, [
-        el("div", { class: "label", text: `작업 선택 · ${modeLabel}` }),
+        el("div", { class: "label", text: `현장 선택 · ${modeLabel}` }),
         search
       ]),
       el("div", { class: "row" }, [
-        el("button", { class: "btn primary", text: "새 작업", onclick: () => renderJobCreate() }),
+        el("button", { class: "btn primary", text: "새 현장", onclick: () => renderJobCreate() }),
       ])
     ]),
     list
   ]));
 
   const refresh = async () => {
-    setFoot("작업 목록을 불러오는 중입니다...");
+    setFoot("현장 목록을 불러오는 중입니다...");
     state.jobs = await fetchJobs(state.company.id, state.mode);
-    setFoot("작업을 선택해 주세요.");
+    setFoot("");
 
     const q = search.value.trim();
     const filtered = q ? state.jobs.filter(j => (j.project_name || "").includes(q)) : state.jobs;
@@ -737,8 +830,8 @@ function renderJobSelect() {
     if (!filtered.length) {
       list.appendChild(el("div", { class: "item" }, [
         el("div", { class: "col" }, [
-          el("div", { class: "item-title", text: "작업이 없습니다." }),
-          el("div", { class: "item-sub", text: "새 작업을 생성해 주세요." }),
+          el("div", { class: "item-title", text: "현장이 없습니다." }),
+          el("div", { class: "item-sub", text: "새 현장을 생성해 주세요." }),
         ])
       ]));
       return;
@@ -780,7 +873,7 @@ function renderJobCreate() {
   msg.textContent = state.authMsg || "";
 
   root.appendChild(el("section", { class: "card" }, [
-    el("div", { class: "label", text: `새 작업 생성 · ${modeLabel}` }),
+    el("div", { class: "label", text: `새 현장 생성 · ${modeLabel}` }),
     el("div", { class: "col", style: "margin-top:10px;" }, [
       el("div", { class: "label", text: "공사명(필수)" }), project,
       el("div", { class: "label", text: "현장주소(선택)" }), address,
@@ -819,16 +912,16 @@ function renderJobWork() {
   root.appendChild(el("section", { class: "card" }, [
     el("div", { class: "row space" }, [
       el("div", { class: "col" }, [
-        el("div", { class: "label", text: `현재 작업 · ${modeLabel}` }),
+        el("div", { class: "label", text: `현재 현장 · ${modeLabel}` }),
         el("div", { style: "font-weight:900; font-size:16px; margin-top:4px;", text: state.job.project_name }),
         el("div", { style: "font-size:12px; color:#666; margin-top:4px;", text: state.company.name }),
       ]),
       el("div", { class: "row" }, [
         el("button", {
           class: "btn small",
-          text: "작업 변경",
+          text: "현장 변경",
           onclick: () => {
-            if (!confirm("작업 선택 화면으로 이동하시겠습니까?")) return;
+            if (!confirm("현장 선택 화면으로 이동하시겠습니까?")) return;
             state.job = null;
             state.addOpen = false;
             render();
@@ -868,9 +961,9 @@ function renderJobWork() {
 
   root.appendChild(el("section", { class: "card" }, [
     el("div", { class: "label", text: "측정일" }),
-    el("div", { class: "row", style: "margin-top:10px;" }, [
-      el("div", { class: "col", style: "flex:1; min-width:220px;" }, [addDate]),
-      el("div", { class: "col" }, [btnGoDate]),
+    el("div", { class: "dateControls", style: "margin-top:10px;" }, [
+      el("div", { class: "dateCol" }, [addDate]),
+      btnGoDate,
     ]),
     tabs
   ]));
@@ -1019,10 +1112,14 @@ function renderSampleRow(sample) {
     btnX,
     el("div", { class: "sampleLeft" }, [
       el("div", { class: "sampleTitle", text: title }),
-      el("div", { class: "sampleSub" }, [
-        el("span", { text: dateText }),
-        el("span", { text: "시작시간" }),
-        t,
+      el("div", { class: "sampleMeta" }, [
+        el("div", { class: "metaLine" }, [
+          el("span", { text: dateText }),
+        ]),
+        el("div", { class: "metaLine" }, [
+          el("span", { text: "시작시간" }),
+          t,
+        ]),
       ])
     ]),
     right
@@ -1075,17 +1172,13 @@ function renderMiniSlot(sample, role) {
 
     supabase.auth.onAuthStateChange(async (_event, session) => {
       state.user = session?.user || null;
-
-      const authed = !!state.user;
-      btnSignOut.style.display = authed ? "" : "none";
-      btnChangeMode.style.display = authed ? "" : "none";
-      btnChangeCompany.style.display = authed ? "" : "none";
-
-      if (!authed) {
+      if (!state.user) {
         state.company = null;
         state.mode = null;
         state.job = null;
       }
+      closeSettings();
+      updateHeader();
       render();
     });
 
