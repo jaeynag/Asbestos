@@ -65,7 +65,7 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
 .label{ font-size:12px; color:var(--muted); }
 
 .input, select{
-  width:100%; padding:10px 10px; border:1px solid var(--line); border-radius:10px;
+  width:90%; padding:10px 10px; border:1px solid var(--line); border-radius:10px;
   font-size:14px; background:#fff;
 }
 
@@ -75,7 +75,7 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
 }
 .btn.primary{ background:var(--pri); color:var(--priText); border-color:var(--pri); }
 .btn.ghost{ background:transparent; }
-.btn.small{ padding:7px 10px; font-size:13px; }
+.btn.small{ padding:7px 8px; font-size:13px; }
 .btn:disabled{ opacity:.5; cursor:not-allowed; }
 
 .tabs{ display:flex; gap:8px; flex-wrap:wrap; }
@@ -257,6 +257,7 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   /* 뷰어 버튼 */
   .viewer-nav{ width:34px; height:34px; font-size:22px; line-height:32px; }
 }
+
 
 
 
