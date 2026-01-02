@@ -29,18 +29,24 @@
     </footer>
   </div>
 
-  <!-- 모달(촬영/앨범 선택 후 확인) -->
+  <!-- 모달(업로드 확인 / 미리보기 공용) -->
   <div id="modal" class="modal" hidden>
     <div class="modal-backdrop"></div>
     <div class="modal-card">
       <div class="modal-head">
-        <div id="modalTitle" class="modal-title">사진 확인</div>
+        <div class="modal-head-left">
+          <button id="modalPrev" class="btn ghost small" title="이전 사진">◀</button>
+          <button id="modalNext" class="btn ghost small" title="다음 사진">▶</button>
+          <div id="modalTitle" class="modal-title">사진 확인</div>
+        </div>
         <button id="modalClose" class="btn ghost">닫기</button>
       </div>
+
       <div class="modal-body">
         <img id="modalPreview" class="modal-preview" alt="미리보기" />
         <div id="modalMeta" class="modal-meta"></div>
       </div>
+
       <div class="modal-actions">
         <button id="modalReject" class="btn ghost">다시 선택</button>
         <button id="modalAccept" class="btn primary">등록</button>
