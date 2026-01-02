@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light" />
+  <title>현장 업로드 (농도/비산)</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="title">
+        <div class="h1">현장 업로드</div>
+        <div class="sub">농도/비산 · Supabase 연동</div>
+      </div>
+
+      <div class="top-actions">
+        <button id="btnChangeMode" class="btn ghost" style="display:none;">모드 변경</button>
+        <button id="btnChangeCompany" class="btn ghost" style="display:none;">회사 변경</button>
+        <button id="btnSignOut" class="btn ghost" style="display:none;">로그아웃</button>
+      </div>
+    </header>
+
+    <main id="root" class="root"></main>
+
+    <footer class="footer">
+      <div id="footStatus" class="footStatus">준비되었습니다.</div>
+    </footer>
+  </div>
+
+  <!-- 모달(촬영/앨범 선택 후 확인) -->
+  <div id="modal" class="modal" hidden>
+    <div class="modal-backdrop"></div>
+    <div class="modal-card">
+      <div class="modal-head">
+        <div id="modalTitle" class="modal-title">사진 확인</div>
+        <button id="modalClose" class="btn ghost">닫기</button>
+      </div>
+      <div class="modal-body">
+        <img id="modalPreview" class="modal-preview" alt="미리보기" />
+        <div id="modalMeta" class="modal-meta"></div>
+      </div>
+      <div class="modal-actions">
+        <button id="modalReject" class="btn ghost">다시 선택</button>
+        <button id="modalAccept" class="btn primary">등록</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
