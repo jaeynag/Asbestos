@@ -63,10 +63,17 @@ const state = {
   addLoc: "",
   addTime: "",
 
-  pending: null, // modal payload
+  pending: null, // 업로드 확인 모달 payload
+
+  viewer: { // 미리보기 모달 상태
+    isPreview: false,
+    sample: null,
+    roles: [],
+    idx: 0,
+  },
 };
 
-// top buttons
+// DOM
 const root = document.getElementById("root");
 const btnSignOut = document.getElementById("btnSignOut");
 const btnChangeMode = document.getElementById("btnChangeMode");
@@ -80,23 +87,34 @@ const modalMeta = document.getElementById("modalMeta");
 const modalClose = document.getElementById("modalClose");
 const modalReject = document.getElementById("modalReject");
 const modalAccept = document.getElementById("modalAccept");
+const modalPrev = document.getElementById("modalPrev");
+const modalNext = document.getElementById("modalNext");
 
-function openModal(pending) {
-  state.pending = pending;
-  modalTitle.textContent = `사진 확인 · ${pending.roleLabel}`;
-  modalPreview.src = pending.objectUrl;
-  modalMeta.textContent = `${pending.sourceLabel} · ${pending.file.name} · ${(pending.file.size / 1024 / 1024).toFixed(2)}MB`;
-  modal.hidden = false;
+// ===== Modal mode switch =====
+function setModalModePreview(isPreview) {
+  state.viewer.isPreview = isPreview;
+  // 미리보기 모드: 좌/우 표시, 업로드 버튼 숨김
+  modalPrev.style.display = isPreview ? "" : "none";
+  modalNext.style.display = isPreview ? "" : "none";
+  modalAccept.style.display = isPreview ? "none" : "";
+  modalReject.style.display = isPreview ? "none" : "";
 }
 
 function closeModal() {
   if (state.pending?.objectUrl) URL.revokeObjectURL(state.pending.objectUrl);
   state.pending = null;
+
+  state.viewer.isPreview = false;
+  state.viewer.sample = null;
+  state.viewer.roles = [];
+  state.viewer.idx = 0;
+
   modal.hidden = true;
 }
 
 modalClose.addEventListener("click", closeModal);
 modalReject.addEventListener("click", closeModal);
+
 modalAccept.addEventListener("click", async () => {
   const p = state.pending;
   if (!p) return;
@@ -104,6 +122,40 @@ modalAccept.addEventListener("click", async () => {
   await uploadAndBindPhoto(p.sample, p.role, p.file);
 });
 
+// ===== swipe for preview =====
+let touchStartX = null;
+modalPreview.addEventListener("touchstart", (e) => {
+  if (!state.viewer.isPreview) return;
+  touchStartX = e.touches?.[0]?.clientX ?? null;
+}, { passive: true });
+
+modalPreview.addEventListener("touchend", (e) => {
+  if (!state.viewer.isPreview) return;
+  if (touchStartX == null) return;
+  const endX = e.changedTouches?.[0]?.clientX ?? null;
+  if (endX == null) return;
+
+  const dx = endX - touchStartX;
+  touchStartX = null;
+
+  if (Math.abs(dx) < 50) return; // threshold
+  if (dx > 0) previewPrev();
+  else previewNext();
+}, { passive: true });
+
+// keyboard arrows
+document.addEventListener("keydown", (e) => {
+  if (modal.hidden) return;
+  if (!state.viewer.isPreview) return;
+  if (e.key === "ArrowLeft") { e.preventDefault(); previewPrev(); }
+  if (e.key === "ArrowRight") { e.preventDefault(); previewNext(); }
+});
+
+// prev/next buttons
+modalPrev.addEventListener("click", () => previewPrev());
+modalNext.addEventListener("click", () => previewNext());
+
+// ===== Auth / session =====
 async function loadSession() {
   const { data } = await supabase.auth.getSession();
   state.user = data.session?.user || null;
@@ -154,6 +206,7 @@ async function signUp(email, password) {
   await loadSession();
 }
 
+// ===== DB helpers =====
 async function fetchCompanies() {
   const { data, error } = await supabase.from("companies").select("id,name").order("name");
   if (error) throw error;
@@ -238,10 +291,9 @@ function ensureThumbUrl(sample, role) {
   const now = Date.now();
   const exp = sample._thumbExp[role] || 0;
   if (sample._thumbUrl[role] && exp > now + 15_000) return;
-
   if (sample._thumbLoading[role]) return;
-  sample._thumbLoading[role] = true;
 
+  sample._thumbLoading[role] = true;
   (async () => {
     try {
       const url = await getSignedUrl(path);
@@ -256,6 +308,108 @@ function ensureThumbUrl(sample, role) {
   })();
 }
 
+async function getPreviewUrl(sample, role) {
+  const path = sample._photoPath?.[role];
+  if (!path) return null;
+
+  // 이미 유효한 URL 있으면 재사용
+  const now = Date.now();
+  const exp = sample._thumbExp?.[role] || 0;
+  const cached = sample._thumbUrl?.[role];
+  if (cached && exp > now + 15_000) return cached;
+
+  // 없으면 즉시 발급
+  try {
+    const url = await getSignedUrl(path);
+    sample._thumbUrl = sample._thumbUrl || {};
+    sample._thumbExp = sample._thumbExp || {};
+    sample._thumbUrl[role] = url;
+    sample._thumbExp[role] = Date.now() + (SIGNED_URL_TTL_SEC * 1000);
+    return url;
+  } catch (e) {
+    console.error(e);
+    return null;
+  }
+}
+
+// ===== Upload confirm modal =====
+function openUploadConfirmModal(pending) {
+  setModalModePreview(false);
+
+  state.pending = pending;
+  modalTitle.textContent = `사진 확인 · ${pending.roleLabel}`;
+  modalPreview.src = pending.objectUrl;
+  modalMeta.textContent = `${pending.sourceLabel} · ${pending.file.name} · ${(pending.file.size / 1024 / 1024).toFixed(2)}MB`;
+  modal.hidden = false;
+}
+
+// ===== Preview viewer (left/right) =====
+function sampleNameForViewer(sample) {
+  if (!sample) return "";
+  if (state.mode === "density") return `P${sample.p_index}`;
+  const loc = (sample.sample_location || "").trim();
+  return loc ? loc : `P${sample.p_index}`;
+}
+
+function viewerRolesForCurrentMode() {
+  return (state.mode === "density") ? ["measurement"] : ["start", "end"];
+}
+
+async function openPreview(sample, initialRole) {
+  setModalModePreview(true);
+
+  state.viewer.sample = sample;
+  state.viewer.roles = viewerRolesForCurrentMode();
+
+  const idx = Math.max(0, state.viewer.roles.indexOf(initialRole));
+  state.viewer.idx = idx;
+
+  await renderPreviewFrame();
+  modal.hidden = false;
+}
+
+function previewPrev() {
+  if (!state.viewer.isPreview || !state.viewer.sample) return;
+  const n = state.viewer.roles.length || 1;
+  state.viewer.idx = (state.viewer.idx - 1 + n) % n;
+  renderPreviewFrame().catch(console.error);
+}
+
+function previewNext() {
+  if (!state.viewer.isPreview || !state.viewer.sample) return;
+  const n = state.viewer.roles.length || 1;
+  state.viewer.idx = (state.viewer.idx + 1) % n;
+  renderPreviewFrame().catch(console.error);
+}
+
+async function renderPreviewFrame() {
+  const s = state.viewer.sample;
+  if (!s) return;
+
+  const role = state.viewer.roles[state.viewer.idx] || state.viewer.roles[0];
+  const name = sampleNameForViewer(s);
+
+  // 제목에 이름 표시
+  modalTitle.textContent = `사진 미리보기 · ${name} · ${roleLabel(role)}`;
+
+  const path = s._photoPath?.[role] || "";
+  const fileName = path ? path.split("/").pop() : "";
+  const dateText = ymdDots(s.measurement_date);
+  const timeText = s.start_time ? ` · 시작시간 ${s.start_time}` : "";
+
+  const url = await getPreviewUrl(s, role);
+
+  if (url) {
+    modalPreview.src = url;
+    modalMeta.textContent = `${dateText}${timeText}${fileName ? ` · ${fileName}` : ""}`;
+  } else {
+    // 사진 없거나 URL 발급 실패
+    modalPreview.src = "";
+    modalMeta.textContent = `${dateText}${timeText} · 사진이 없습니다.`;
+  }
+}
+
+// ===== Upload =====
 async function uploadAndBindPhoto(sample, role, file) {
   sample._photoState = sample._photoState || {};
   sample._photoPath = sample._photoPath || {};
@@ -309,7 +463,7 @@ function pickPhoto(sample, role, useCameraCapture) {
     if (!file) return;
 
     const objectUrl = URL.createObjectURL(file);
-    openModal({
+    openUploadConfirmModal({
       sample,
       role,
       roleLabel: roleLabel(role),
@@ -431,7 +585,7 @@ function render() {
   renderJobWork();
 }
 
-/* ===== Auth ===== */
+/* Auth */
 function renderAuth() {
   const email = el("input", { class: "input", type: "email", placeholder: "이메일" });
   const pw = el("input", { class: "input", type: "password", placeholder: "비밀번호" });
@@ -471,8 +625,23 @@ function renderAuth() {
         }
         render();
       } catch (e) {
-        msg.textContent = e.message || String(e);
-        setFoot("요청에 실패했습니다.");
+        const m = (e?.message || String(e) || "").toLowerCase();
+        const isDup =
+          m.includes("already registered") ||
+          m.includes("already exists") ||
+          m.includes("user already") ||
+          m.includes("duplicate") ||
+          (m.includes("email") && m.includes("exists"));
+
+        if (state.authTab === "signup" && isDup) {
+          msg.textContent = "이미 가입된 이메일입니다. 로그인으로 진행해 주세요.";
+          alert("이미 가입된 이메일입니다. 로그인으로 진행해 주세요.");
+          setFoot("이미 가입된 이메일입니다.");
+        } else {
+          msg.textContent = e.message || String(e);
+          setFoot("요청에 실패했습니다.");
+          alert(e.message || String(e));
+        }
       }
     }
   });
@@ -490,7 +659,7 @@ function renderAuth() {
   ]));
 }
 
-/* ===== Company ===== */
+/* Company */
 function renderCompanySelect() {
   const list = el("div", { class: "list", style: "margin-top:12px;" });
   root.appendChild(el("section", { class: "card" }, [
@@ -541,7 +710,7 @@ function renderCompanySelect() {
   })();
 }
 
-/* ===== Mode ===== */
+/* Mode */
 function renderModeSelect() {
   root.appendChild(el("section", { class: "card" }, [
     el("div", { class: "label", text: "모드 선택" }),
@@ -552,7 +721,7 @@ function renderModeSelect() {
   ]));
 }
 
-/* ===== Job ===== */
+/* Job */
 function renderJobSelect() {
   const modeLabel = (state.mode === "density") ? "농도" : "비산";
   const search = el("input", { class: "input", placeholder: "공사명 검색" });
@@ -657,7 +826,7 @@ function renderJobCreate() {
   ]));
 }
 
-/* ===== Job work ===== */
+/* Job work */
 function renderJobWork() {
   const modeLabel = (state.mode === "density") ? "농도" : "비산";
 
@@ -683,7 +852,6 @@ function renderJobWork() {
     ])
   ]));
 
-  // date tabs
   const addDate = el("input", { class: "input", type: "date", value: state.activeDate || new Date().toISOString().slice(0, 10) });
   const btnGoDate = el("button", {
     class: "btn small",
@@ -723,7 +891,6 @@ function renderJobWork() {
   const dateISO = state.activeDate || new Date().toISOString().slice(0, 10);
   const samples = state.samplesByDate.get(dateISO) || [];
 
-  // add sample panel
   root.appendChild(el("section", { class: "card" }, [
     el("div", { class: "row space" }, [
       el("div", { class: "col" }, [
@@ -741,7 +908,6 @@ function renderJobWork() {
     ...(state.addOpen ? [renderAddSamplePanel(dateISO)] : []),
   ]));
 
-  // samples list
   if (!samples.length) {
     root.appendChild(el("section", { class: "card" }, [
       el("div", { class: "label", text: "안내" }),
@@ -764,7 +930,7 @@ function renderAddSamplePanel(dateISO) {
     ? (() => {
       const sel = el("select", { class: "input" }, options.map(x => el("option", { value: x, text: x })));
       sel.value = state.addLoc || options[0];
-      state.addLoc = sel.value; // 초기값 저장
+      state.addLoc = sel.value;
       sel.addEventListener("change", () => { state.addLoc = sel.value; });
       return sel;
     })()
@@ -880,7 +1046,6 @@ function renderMiniSlot(sample, role) {
   sample._thumbUrl = sample._thumbUrl || {};
 
   const status = sample._photoState[role] || (sample._photoPath[role] ? "done" : "empty");
-
   if (status === "done" && sample._photoPath[role]) ensureThumbUrl(sample, role);
 
   const head = el("div", { class: "slotHead" }, [
@@ -890,8 +1055,16 @@ function renderMiniSlot(sample, role) {
 
   const thumb = el("div", { class: "thumbMini" }, []);
   const url = sample._thumbUrl?.[role] || null;
-  if (url) thumb.appendChild(el("img", { src: url, alt: roleLabel(role) }));
-  else thumb.appendChild(el("div", { text: "사진 없음" }));
+
+  if (url) {
+    thumb.appendChild(el("img", { src: url, alt: roleLabel(role) }));
+    thumb.classList.add("clickable");
+    thumb.addEventListener("click", () => {
+      openPreview(sample, role).catch(console.error);
+    });
+  } else {
+    thumb.appendChild(el("div", { text: "사진 없음" }));
+  }
 
   const btns = el("div", { class: "slotBtns" }, [
     el("button", { class: "btn small", text: "촬영", onclick: () => pickPhoto(sample, role, true) }),
@@ -901,10 +1074,13 @@ function renderMiniSlot(sample, role) {
   return el("div", { class: "slotMini" }, [head, thumb, btns]);
 }
 
-/* ===== Boot ===== */
+/* Boot */
 (async function main() {
   try {
     await loadSession();
+
+    // 초기 모달 상태
+    setModalModePreview(false);
 
     supabase.auth.onAuthStateChange(async (_event, session) => {
       state.user = session?.user || null;
