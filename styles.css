@@ -59,10 +59,10 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
 .dot.blink{ animation: blink 1s infinite; }
 @keyframes blink{ 0%,100%{ opacity:1 } 50%{ opacity:.25 } }
 
-/* ===== Auth tabs ===== */
+/* Auth tabs */
 .authTabs{ display:flex; gap:8px; margin-top:8px; }
 
-/* ===== 삭제(X) 버튼: 카드 안쪽 고정 ===== */
+/* X 버튼: 카드 안쪽 */
 .xBtn{
   position:absolute;
   left:10px;
@@ -82,7 +82,7 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
 }
 .xBtn:active{ filter:brightness(0.97); }
 
-/* ===== Compact sample row ===== */
+/* sample row */
 .sampleRow{
   position:relative;
   display:flex;
@@ -90,7 +90,7 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   justify-content:space-between;
   gap:10px;
   padding:10px 12px;
-  padding-left:44px;           /* X 자리 */
+  padding-left:44px;
   border:1px solid var(--line);
   border-radius:12px;
   background:#fff;
@@ -136,7 +136,7 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   align-items:flex-end;
 }
 
-/* 닷을 라벨 옆으로 */
+/* dot을 라벨 옆으로 */
 .slotHead{
   display:flex;
   align-items:center;
@@ -158,7 +158,6 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   justify-content:center;
   font-size:11px;
   color:var(--muted);
-  position:relative;
 }
 .thumbMini img{
   width:100%;
@@ -166,19 +165,23 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   object-fit:cover;
 }
 
+.thumbMini.clickable{ cursor:pointer; }
+.thumbMini.clickable:hover{ filter:brightness(0.98); }
+
 .slotBtns{
   display:flex;
   gap:6px;
 }
 
-/* ===== Modal ===== */
+/* Modal */
 .modal{ position:fixed; inset:0; display:flex; align-items:center; justify-content:center; padding:16px; z-index:50; }
 .modal[hidden]{ display:none; }
 .modal-backdrop{ position:absolute; inset:0; background:rgba(0,0,0,.5); }
 .modal-card{ position:relative; width:min(720px, 100%); background:#fff; border-radius:14px; border:1px solid var(--line); overflow:hidden; }
-.modal-head{ padding:12px 12px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--line); }
-.modal-title{ font-weight:800; }
+.modal-head{ padding:12px 12px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--line); gap:10px; }
+.modal-head-left{ display:flex; align-items:center; gap:8px; min-width:0; }
+.modal-title{ font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width: 520px; }
 .modal-body{ padding:12px; display:flex; flex-direction:column; gap:10px; }
-.modal-preview{ width:100%; max-height:60vh; object-fit:contain; border-radius:10px; border:1px solid var(--line); background:#fafbfc; }
+.modal-preview{ width:100%; max-height:60vh; object-fit:contain; border-radius:10px; border:1px solid var(--line); background:#fafbfc; touch-action: pan-y; }
 .modal-meta{ font-size:12px; color:var(--muted); }
 .modal-actions{ padding:12px; display:flex; gap:10px; justify-content:flex-end; border-top:1px solid var(--line); }
