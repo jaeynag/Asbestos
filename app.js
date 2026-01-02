@@ -1106,9 +1106,10 @@ function renderSampleRow(sample) {
   });
 
   const roles = (state.mode === "density") ? ["measurement"] : ["start", "end"];
-  const right = el("div", { class: "sampleRight" }, roles.map(role => renderMiniSlot(sample, role)));
+  const right = el("div", { class: `sampleRight ${state.mode}` }, roles.map(role => renderMiniSlot(sample, role)));
 
-  return el("div", { class: "sampleRow" }, [
+  // ✅ 여기: 모드별 class 추가
+  return el("div", { class: `sampleRow mode-${state.mode}` }, [
     btnX,
     el("div", { class: "sampleLeft" }, [
       el("div", { class: "sampleTitle", text: title }),
@@ -1132,7 +1133,6 @@ function renderMiniSlot(sample, role) {
   sample._thumbUrl = sample._thumbUrl || {};
 
   const status = sample._photoState[role] || (sample._photoPath[role] ? "done" : "empty");
-
   if (status === "done" && sample._photoPath[role]) ensureThumbUrl(sample, role);
 
   const head = el("div", { class: "slotHead" }, [
@@ -1142,6 +1142,7 @@ function renderMiniSlot(sample, role) {
 
   const thumb = el("div", { class: "thumbMini" }, []);
   const url = sample._thumbUrl?.[role] || null;
+
   if (url) {
     const img = el("img", { src: url, alt: roleLabel(role) });
     thumb.appendChild(img);
@@ -1162,7 +1163,14 @@ function renderMiniSlot(sample, role) {
     el("button", { class: "btn small", text: "앨범", onclick: () => pickPhoto(sample, role, false) }),
   ]);
 
-  return el("div", { class: "slotMini" }, [head, thumb, btns]);
+  // ✅ 농도: "라벨(닷+측정사진) + 썸네일"을 한 줄로 만들고, 버튼은 아래
+  if (state.mode === "density") {
+    const inline = el("div", { class: "slotInline" }, [head, thumb]);
+    return el("div", { class: "slotMini density" }, [inline, btns]);
+  }
+
+  // ✅ 비산: 기존(라벨 위, 썸네일 아래) + 버튼 아래 (2개가 나란히 보이게 CSS로 정렬)
+  return el("div", { class: "slotMini scatter" }, [head, thumb, btns]);
 }
 
 /* ===== Boot ===== */
