@@ -1,4 +1,4 @@
-import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+importㅇ{ port { creat } ient "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 
 /** 고정 값 */
 const SUPABASE_URL = "https://jvzcynpajbjdbtzbysxm.supabase.co";
@@ -935,7 +935,7 @@ function renderJobWork() {
   const addDate = el("input", { class: "input", type: "date", value: state.activeDate || new Date().toISOString().slice(0, 10) });
   const btnGoDate = el("button", {
     class: "btn small",
-    text: "이 날짜로 이동",
+    text: "입력",
     onclick: () => {
       const d = addDate.value;
       if (!d) return;
@@ -1198,3 +1198,4 @@ function renderMiniSlot(sample, role) {
     root.appendChild(el("div", { class: "card", text: e.message || String(e) }));
   }
 })();
+
