@@ -29,27 +29,43 @@
     </footer>
   </div>
 
-  <!-- 모달(업로드 확인 / 미리보기 공용) -->
+  <!-- 모달(촬영/앨범 선택 후 확인) -->
   <div id="modal" class="modal" hidden>
     <div class="modal-backdrop"></div>
     <div class="modal-card">
       <div class="modal-head">
-        <div class="modal-head-left">
-          <button id="modalPrev" class="btn ghost small" title="이전 사진">◀</button>
-          <button id="modalNext" class="btn ghost small" title="다음 사진">▶</button>
-          <div id="modalTitle" class="modal-title">사진 확인</div>
-        </div>
+        <div id="modalTitle" class="modal-title">사진 확인</div>
         <button id="modalClose" class="btn ghost">닫기</button>
       </div>
-
       <div class="modal-body">
         <img id="modalPreview" class="modal-preview" alt="미리보기" />
         <div id="modalMeta" class="modal-meta"></div>
       </div>
-
       <div class="modal-actions">
         <button id="modalReject" class="btn ghost">다시 선택</button>
         <button id="modalAccept" class="btn primary">등록</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 미리보기 모달(썸네일 클릭) -->
+  <div id="viewerModal" class="modal" hidden>
+    <div class="modal-backdrop"></div>
+    <div class="modal-card viewer-card">
+      <div class="modal-head">
+        <div class="viewer-head-left">
+          <div id="viewerTitle" class="modal-title">미리보기</div>
+          <div id="viewerLabel" class="viewer-label"></div>
+        </div>
+        <div class="viewer-head-right">
+          <button id="viewerZoom" class="btn ghost">확대</button>
+          <button id="viewerClose" class="btn ghost">닫기</button>
+        </div>
+      </div>
+      <div class="viewer-body">
+        <button id="viewerPrev" class="viewer-nav" aria-label="이전">‹</button>
+        <img id="viewerImg" class="viewer-img" alt="미리보기" />
+        <button id="viewerNext" class="viewer-nav" aria-label="다음">›</button>
       </div>
     </div>
   </div>
