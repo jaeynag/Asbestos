@@ -1,4 +1,4 @@
-import { port { creat } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 
 /** 고정 값 */
 const SUPABASE_URL = "https://jvzcynpajbjdbtzbysxm.supabase.co";
@@ -1198,7 +1198,3 @@ function renderMiniSlot(sample, role) {
     root.appendChild(el("div", { class: "card", text: e.message || String(e) }));
   }
 })();
-
-
-
-
