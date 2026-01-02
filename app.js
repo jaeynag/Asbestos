@@ -1006,7 +1006,7 @@ function renderJobWork() {
 }
 
 function renderAddSamplePanel(dateISO) {
-  const options = ["부지경계선", "작업장주변", "출입구", "하역장", "기타"];
+  const options = ["부지경계선", "작업장주변 실내", "작업장주변 실외", "위생설비", "음압기 배출구", "폐기물 반출구", "폐기물 보관지점"];
 
   const locNode = (state.mode === "scatter")
     ? (() => {
