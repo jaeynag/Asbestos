@@ -158,7 +158,7 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
 
 .sampleRight{
   display:flex;
-  gap:10px;
+  gap:4px;
   align-items:flex-start;
   flex-wrap:wrap;
   justify-content:flex-end;
@@ -200,7 +200,7 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
 
 /* 비산(Scatter)만: 사진 2칸 사이 간격을 조금 줄여서 텍스트 영역을 더 확보 */
 .sampleRow.mode-scatter .sampleRight.scatter{ gap:10px; }
-.sampleRow.mode-scatter .slotMini.scatter{ width: 160px; }
+.sampleRow.mode-scatter .slotMini.scatter{ width: 120px; }
 
 /* 비산: 2개가 항상 옆으로 (좁아지면 wrap) */
 .sampleRight.scatter{
@@ -257,6 +257,7 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   /* 뷰어 버튼 */
   .viewer-nav{ width:34px; height:34px; font-size:22px; line-height:32px; }
 }
+
 
 
 
