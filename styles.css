@@ -185,6 +185,93 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
 
 .slotBtns{ display:flex; gap:6px; }
 
+/* =========================
+   사진 배치: 모드별 정렬
+   ========================= */
+
+/* 오른쪽 영역 기본 */
+.sampleRight.density,
+.sampleRight.scatter{
+  display:flex;
+  align-items:flex-start;
+  justify-content:flex-end;
+  gap:12px;
+}
+
+/* 비산: 2개가 항상 옆으로 (좁아지면 wrap) */
+.sampleRight.scatter{
+  flex-wrap:nowrap;
+}
+@media (max-width: 520px){
+  .sampleRight.scatter{ flex-wrap:wrap; }
+}
+
+/* 농도: 1개라서 inline 라벨+썸네일 */
+.slotMini.density{
+  display:flex;
+  flex-direction:column;
+  align-items:flex-end;
+  gap:8px;
+}
+.slotMini.density .slotInline{
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+
+/* 농도 inline 라벨은 오른쪽 정렬 (닷+텍스트가 썸네일 왼쪽) */
+.slotMini.density .slotHead{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap:6px;
+  min-width:88px; /* 라벨 폭 확보 */
+}
+
+/* 비산: 각 슬롯을 같은 폭으로 잡아서 2개가 예쁘게 나란히 */
+.slotMini.scatter{
+  display:flex;
+  flex-direction:column;
+  align-items:flex-end;
+  gap:6px;
+  width: 168px;       /* 여기 숫자 조절하면 2개 배치 느낌 바뀜 */
+}
+
+/* 썸네일 크기: 스샷 느낌으로 조금 키움 */
+.thumbMini{
+  width: 104px;
+  height: 64px;
+  border-radius:10px;
+  border:1px dashed var(--line);
+  background:#fafbfc;
+  overflow:hidden;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-size:11px;
+  color:var(--muted);
+}
+.thumbMini img{ width:100%; height:100%; object-fit:cover; }
+
+/* 버튼도 너무 길어지지 않게 */
+.slotBtns{
+  display:flex;
+  gap:6px;
+  justify-content:flex-end;
+}
+.btn.small{
+  padding:7px 10px;
+  font-size:13px;
+}
+
+/* sampleRow가 너무 커지지 않게 상하 여백 살짝 줄임 */
+.sampleRow{
+  padding-top:10px;
+  padding-bottom:10px;
+}
+.sampleMeta{ gap:6px; }
+
+
 /* ===== 날짜 컨트롤: 겹침 방지 ===== */
 .dateControls{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
 .dateControls .dateCol{ flex:1; min-width: 220px; }
