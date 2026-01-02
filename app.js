@@ -19,6 +19,10 @@ function setFoot(msg) {
   document.getElementById("footStatus").textContent = msg;
 }
 
+function normEmail(v) {
+  return String(v || "").trim().toLowerCase();
+}
+
 function el(tag, attrs = {}, children = []) {
   const n = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -59,21 +63,22 @@ const state = {
   samplesByDate: new Map(),
 
   authTab: "login", // login|signup
+  authMsg: "",
   addOpen: false,
   addLoc: "",
   addTime: "",
 
   pending: null, // 업로드 확인 모달 payload
 
-  viewer: { // 미리보기 모달 상태
-    isPreview: false,
-    sample: null,
-    roles: [],
-    idx: 0,
+  viewer: {
+    open: false,
+    items: [],
+    index: 0,
+    zoom: 1,
   },
 };
 
-// DOM
+// top buttons
 const root = document.getElementById("root");
 const btnSignOut = document.getElementById("btnSignOut");
 const btnChangeMode = document.getElementById("btnChangeMode");
@@ -87,34 +92,157 @@ const modalMeta = document.getElementById("modalMeta");
 const modalClose = document.getElementById("modalClose");
 const modalReject = document.getElementById("modalReject");
 const modalAccept = document.getElementById("modalAccept");
-const modalPrev = document.getElementById("modalPrev");
-const modalNext = document.getElementById("modalNext");
 
-// ===== Modal mode switch =====
-function setModalModePreview(isPreview) {
-  state.viewer.isPreview = isPreview;
-  // 미리보기 모드: 좌/우 표시, 업로드 버튼 숨김
-  modalPrev.style.display = isPreview ? "" : "none";
-  modalNext.style.display = isPreview ? "" : "none";
-  modalAccept.style.display = isPreview ? "none" : "";
-  modalReject.style.display = isPreview ? "none" : "";
+// viewer modal
+const viewerModal = document.getElementById("viewerModal");
+const viewerTitle = document.getElementById("viewerTitle");
+const viewerImg = document.getElementById("viewerImg");
+const viewerLabel = document.getElementById("viewerLabel");
+const viewerClose = document.getElementById("viewerClose");
+const viewerPrev = document.getElementById("viewerPrev");
+const viewerNext = document.getElementById("viewerNext");
+const viewerZoom = document.getElementById("viewerZoom");
+
+function openModal(pending) {
+  state.pending = pending;
+  modalTitle.textContent = `사진 확인 · ${pending.roleLabel}`;
+  modalPreview.src = pending.objectUrl;
+  modalMeta.textContent = `${pending.sourceLabel} · ${pending.file.name} · ${(pending.file.size / 1024 / 1024).toFixed(2)}MB`;
+  modal.hidden = false;
 }
 
 function closeModal() {
   if (state.pending?.objectUrl) URL.revokeObjectURL(state.pending.objectUrl);
   state.pending = null;
-
-  state.viewer.isPreview = false;
-  state.viewer.sample = null;
-  state.viewer.roles = [];
-  state.viewer.idx = 0;
-
   modal.hidden = true;
 }
 
+
+function viewerRoleOrder() {
+  return (state.mode === "density") ? ["measurement"] : ["start", "end"];
+}
+
+function buildViewerItemsForDate(dateISO) {
+  const samples = state.samplesByDate.get(dateISO) || [];
+  const roles = viewerRoleOrder();
+  const items = [];
+
+  const sorted = [...samples].sort((a, b) => (a.p_index || 0) - (b.p_index || 0));
+  for (const s of sorted) {
+    const loc = (s.sample_location || "").trim() || "(미입력)";
+    const label = `P${s.p_index} · ${loc}`;
+    for (const role of roles) {
+      const path = s._photoPath?.[role];
+      if (!path) continue;
+      items.push({
+        sample_id: s.id,
+        p_index: s.p_index,
+        label,
+        role,
+        path,
+        url: null,
+        exp: 0,
+      });
+    }
+  }
+  return items;
+}
+
+async function ensureViewerUrl(item) {
+  const now = Date.now();
+  if (item.url && item.exp > now + 15_000) return item.url;
+  const url = await getSignedUrl(item.path);
+  item.url = url;
+  item.exp = Date.now() + (SIGNED_URL_TTL_SEC * 1000);
+  return url;
+}
+
+async function openViewer(dateISO, sampleId, role) {
+  try {
+    const items = buildViewerItemsForDate(dateISO);
+    if (!items.length) return;
+
+    let idx = items.findIndex(x => x.sample_id === sampleId && x.role === role);
+    if (idx < 0) idx = 0;
+
+    state.viewer.open = true;
+    state.viewer.items = items;
+    state.viewer.index = idx;
+    state.viewer.zoom = 1;
+
+    viewerModal.hidden = false;
+    await renderViewer();
+  } catch (e) {
+    console.error(e);
+    alert(e.message || String(e));
+  }
+}
+
+function closeViewer() {
+  state.viewer.open = false;
+  state.viewer.items = [];
+  state.viewer.index = 0;
+  state.viewer.zoom = 1;
+  viewerModal.hidden = true;
+}
+
+async function renderViewer() {
+  if (!state.viewer.open) return;
+  const items = state.viewer.items;
+  const i = Math.max(0, Math.min(items.length - 1, state.viewer.index));
+  state.viewer.index = i;
+
+  const item = items[i];
+  const url = await ensureViewerUrl(item);
+
+  viewerTitle.textContent = roleLabel(item.role);
+  viewerLabel.textContent = item.label;
+  viewerImg.src = url;
+
+  viewerPrev.disabled = (i <= 0);
+  viewerNext.disabled = (i >= items.length - 1);
+
+  viewerImg.classList.toggle("zoom2", state.viewer.zoom >= 2);
+}
+
+viewerClose?.addEventListener("click", closeViewer);
+viewerPrev?.addEventListener("click", async () => {
+  if (!state.viewer.open) return;
+  if (state.viewer.index <= 0) return;
+  state.viewer.index -= 1;
+  state.viewer.zoom = 1;
+  await renderViewer();
+});
+viewerNext?.addEventListener("click", async () => {
+  if (!state.viewer.open) return;
+  if (state.viewer.index >= state.viewer.items.length - 1) return;
+  state.viewer.index += 1;
+  state.viewer.zoom = 1;
+  await renderViewer();
+});
+viewerZoom?.addEventListener("click", async () => {
+  if (!state.viewer.open) return;
+  state.viewer.zoom = (state.viewer.zoom >= 2) ? 1 : 2;
+  await renderViewer();
+});
+
+// iOS에서 이미지 탭으로 줌 토글
+viewerImg?.addEventListener("click", async () => {
+  if (!state.viewer.open) return;
+  state.viewer.zoom = (state.viewer.zoom >= 2) ? 1 : 2;
+  await renderViewer();
+});
+
+// 키보드(PC) 좌우
+document.addEventListener("keydown", async (ev) => {
+  if (!state.viewer.open) return;
+  if (ev.key === "Escape") { closeViewer(); return; }
+  if (ev.key === "ArrowLeft") { if (state.viewer.index > 0) { state.viewer.index -= 1; state.viewer.zoom = 1; await renderViewer(); } }
+  if (ev.key === "ArrowRight") { if (state.viewer.index < state.viewer.items.length - 1) { state.viewer.index += 1; state.viewer.zoom = 1; await renderViewer(); } }
+});
+
 modalClose.addEventListener("click", closeModal);
 modalReject.addEventListener("click", closeModal);
-
 modalAccept.addEventListener("click", async () => {
   const p = state.pending;
   if (!p) return;
@@ -122,40 +250,6 @@ modalAccept.addEventListener("click", async () => {
   await uploadAndBindPhoto(p.sample, p.role, p.file);
 });
 
-// ===== swipe for preview =====
-let touchStartX = null;
-modalPreview.addEventListener("touchstart", (e) => {
-  if (!state.viewer.isPreview) return;
-  touchStartX = e.touches?.[0]?.clientX ?? null;
-}, { passive: true });
-
-modalPreview.addEventListener("touchend", (e) => {
-  if (!state.viewer.isPreview) return;
-  if (touchStartX == null) return;
-  const endX = e.changedTouches?.[0]?.clientX ?? null;
-  if (endX == null) return;
-
-  const dx = endX - touchStartX;
-  touchStartX = null;
-
-  if (Math.abs(dx) < 50) return; // threshold
-  if (dx > 0) previewPrev();
-  else previewNext();
-}, { passive: true });
-
-// keyboard arrows
-document.addEventListener("keydown", (e) => {
-  if (modal.hidden) return;
-  if (!state.viewer.isPreview) return;
-  if (e.key === "ArrowLeft") { e.preventDefault(); previewPrev(); }
-  if (e.key === "ArrowRight") { e.preventDefault(); previewNext(); }
-});
-
-// prev/next buttons
-modalPrev.addEventListener("click", () => previewPrev());
-modalNext.addEventListener("click", () => previewNext());
-
-// ===== Auth / session =====
 async function loadSession() {
   const { data } = await supabase.auth.getSession();
   state.user = data.session?.user || null;
@@ -195,18 +289,31 @@ btnChangeCompany.addEventListener("click", () => {
 });
 
 async function signIn(email, password) {
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  const e = normEmail(email);
+  const { error } = await supabase.auth.signInWithPassword({ email: e, password });
   if (error) throw error;
   await loadSession();
 }
 
 async function signUp(email, password) {
-  const { error } = await supabase.auth.signUp({ email, password });
+  const e = normEmail(email);
+  // 보안/설정에 따라 이미 가입된 이메일이어도 성공처럼 응답할 수 있습니다.
+  // 따라서 앱에서는 '가입 완료'가 아니라 '확인 메일 전송' 안내로 처리합니다.
+  const { data, error } = await supabase.auth.signUp({
+    email: e,
+    password,
+    options: {
+      emailRedirectTo: location.origin,
+    },
+  });
   if (error) throw error;
-  await loadSession();
+
+  // 이메일 확인이 꺼져 있으면 session이 바로 내려옵니다.
+  if (data?.session) {
+    await loadSession();
+  }
 }
 
-// ===== DB helpers =====
 async function fetchCompanies() {
   const { data, error } = await supabase.from("companies").select("id,name").order("name");
   if (error) throw error;
@@ -291,9 +398,10 @@ function ensureThumbUrl(sample, role) {
   const now = Date.now();
   const exp = sample._thumbExp[role] || 0;
   if (sample._thumbUrl[role] && exp > now + 15_000) return;
-  if (sample._thumbLoading[role]) return;
 
+  if (sample._thumbLoading[role]) return;
   sample._thumbLoading[role] = true;
+
   (async () => {
     try {
       const url = await getSignedUrl(path);
@@ -308,108 +416,6 @@ function ensureThumbUrl(sample, role) {
   })();
 }
 
-async function getPreviewUrl(sample, role) {
-  const path = sample._photoPath?.[role];
-  if (!path) return null;
-
-  // 이미 유효한 URL 있으면 재사용
-  const now = Date.now();
-  const exp = sample._thumbExp?.[role] || 0;
-  const cached = sample._thumbUrl?.[role];
-  if (cached && exp > now + 15_000) return cached;
-
-  // 없으면 즉시 발급
-  try {
-    const url = await getSignedUrl(path);
-    sample._thumbUrl = sample._thumbUrl || {};
-    sample._thumbExp = sample._thumbExp || {};
-    sample._thumbUrl[role] = url;
-    sample._thumbExp[role] = Date.now() + (SIGNED_URL_TTL_SEC * 1000);
-    return url;
-  } catch (e) {
-    console.error(e);
-    return null;
-  }
-}
-
-// ===== Upload confirm modal =====
-function openUploadConfirmModal(pending) {
-  setModalModePreview(false);
-
-  state.pending = pending;
-  modalTitle.textContent = `사진 확인 · ${pending.roleLabel}`;
-  modalPreview.src = pending.objectUrl;
-  modalMeta.textContent = `${pending.sourceLabel} · ${pending.file.name} · ${(pending.file.size / 1024 / 1024).toFixed(2)}MB`;
-  modal.hidden = false;
-}
-
-// ===== Preview viewer (left/right) =====
-function sampleNameForViewer(sample) {
-  if (!sample) return "";
-  if (state.mode === "density") return `P${sample.p_index}`;
-  const loc = (sample.sample_location || "").trim();
-  return loc ? loc : `P${sample.p_index}`;
-}
-
-function viewerRolesForCurrentMode() {
-  return (state.mode === "density") ? ["measurement"] : ["start", "end"];
-}
-
-async function openPreview(sample, initialRole) {
-  setModalModePreview(true);
-
-  state.viewer.sample = sample;
-  state.viewer.roles = viewerRolesForCurrentMode();
-
-  const idx = Math.max(0, state.viewer.roles.indexOf(initialRole));
-  state.viewer.idx = idx;
-
-  await renderPreviewFrame();
-  modal.hidden = false;
-}
-
-function previewPrev() {
-  if (!state.viewer.isPreview || !state.viewer.sample) return;
-  const n = state.viewer.roles.length || 1;
-  state.viewer.idx = (state.viewer.idx - 1 + n) % n;
-  renderPreviewFrame().catch(console.error);
-}
-
-function previewNext() {
-  if (!state.viewer.isPreview || !state.viewer.sample) return;
-  const n = state.viewer.roles.length || 1;
-  state.viewer.idx = (state.viewer.idx + 1) % n;
-  renderPreviewFrame().catch(console.error);
-}
-
-async function renderPreviewFrame() {
-  const s = state.viewer.sample;
-  if (!s) return;
-
-  const role = state.viewer.roles[state.viewer.idx] || state.viewer.roles[0];
-  const name = sampleNameForViewer(s);
-
-  // 제목에 이름 표시
-  modalTitle.textContent = `사진 미리보기 · ${name} · ${roleLabel(role)}`;
-
-  const path = s._photoPath?.[role] || "";
-  const fileName = path ? path.split("/").pop() : "";
-  const dateText = ymdDots(s.measurement_date);
-  const timeText = s.start_time ? ` · 시작시간 ${s.start_time}` : "";
-
-  const url = await getPreviewUrl(s, role);
-
-  if (url) {
-    modalPreview.src = url;
-    modalMeta.textContent = `${dateText}${timeText}${fileName ? ` · ${fileName}` : ""}`;
-  } else {
-    // 사진 없거나 URL 발급 실패
-    modalPreview.src = "";
-    modalMeta.textContent = `${dateText}${timeText} · 사진이 없습니다.`;
-  }
-}
-
-// ===== Upload =====
 async function uploadAndBindPhoto(sample, role, file) {
   sample._photoState = sample._photoState || {};
   sample._photoPath = sample._photoPath || {};
@@ -463,7 +469,7 @@ function pickPhoto(sample, role, useCameraCapture) {
     if (!file) return;
 
     const objectUrl = URL.createObjectURL(file);
-    openUploadConfirmModal({
+    openModal({
       sample,
       role,
       roleLabel: roleLabel(role),
@@ -499,32 +505,18 @@ async function renumberSamplesForDate(jobId, dateISO) {
 
 /** 시료 삭제 + 재정렬 */
 async function deleteSample(sample) {
-  const msg = `P${sample.p_index} 시료를 삭제하시겠습니까?\n첨부된 사진도 함께 삭제됩니다.`;
+  const msg = `P${sample.p_index} 시료를 삭제하시겠습니까?
+첨부된 사진도 함께 삭제됩니다.`;
   if (!confirm(msg)) return;
 
   try {
     setFoot("삭제를 진행 중입니다...");
 
-    const { data: photos, error: pErr } = await supabase
-      .from("sample_photos")
-      .select("storage_path")
-      .eq("sample_id", sample.id);
-    if (pErr) throw pErr;
-
-    const paths = (photos || []).map(x => x.storage_path).filter(Boolean);
-
-    if (paths.length) {
-      const { error: sErr } = await supabase.storage.from(BUCKET).remove(paths);
-      if (sErr) console.warn("Storage 삭제에 실패했습니다(계속 진행):", sErr);
-    }
-
-    const { error: d1 } = await supabase.from("sample_photos").delete().eq("sample_id", sample.id);
-    if (d1) throw d1;
-
-    const { error: d2 } = await supabase.from("job_samples").delete().eq("id", sample.id);
-    if (d2) throw d2;
-
-    await renumberSamplesForDate(sample.job_id, sample.measurement_date);
+    // 서버 RPC로 삭제 + 재정렬(권장)
+    const { error } = await supabase.rpc("delete_sample_and_renumber", {
+      p_sample_id: sample.id,
+    });
+    if (error) throw error;
 
     setFoot("삭제가 완료되었습니다.");
     await loadJob(state.job);
@@ -585,12 +577,13 @@ function render() {
   renderJobWork();
 }
 
-/* Auth */
+/* ===== Auth ===== */
 function renderAuth() {
   const email = el("input", { class: "input", type: "email", placeholder: "이메일" });
   const pw = el("input", { class: "input", type: "password", placeholder: "비밀번호" });
   const pw2 = el("input", { class: "input", type: "password", placeholder: "비밀번호 확인" });
   const msg = el("div", { style: "margin-top:10px; color:#666; font-size:13px;" });
+  msg.textContent = state.authMsg || "";
 
   const tabs = el("div", { class: "authTabs" }, [
     el("button", {
@@ -610,38 +603,30 @@ function renderAuth() {
     text: state.authTab === "login" ? "로그인" : "회원가입",
     onclick: async () => {
       try {
+        state.authMsg = "";
         msg.textContent = "";
         if (!email.value.trim() || !pw.value) { msg.textContent = "이메일과 비밀번호를 입력해 주세요."; return; }
 
         if (state.authTab === "signup") {
           if (pw.value !== pw2.value) { msg.textContent = "비밀번호 확인이 일치하지 않습니다."; return; }
           setFoot("회원가입을 진행 중입니다...");
-          await signUp(email.value.trim(), pw.value);
-          setFoot("회원가입이 완료되었습니다.");
+          await signUp(email.value, pw.value);
+          if (state.user) {
+            setFoot("회원가입이 완료되었습니다.");
+          } else {
+            state.authMsg = "가입 확인 이메일을 발송했습니다. 이메일 인증 후 로그인해 주세요. (이미 가입된 이메일이면 별도 안내가 없을 수 있습니다.)";
+            state.authTab = "login";
+            setFoot("가입 확인 이메일을 발송했습니다.");
+          }
         } else {
           setFoot("로그인을 진행 중입니다...");
-          await signIn(email.value.trim(), pw.value);
+          await signIn(email.value, pw.value);
           setFoot("로그인이 완료되었습니다.");
         }
         render();
       } catch (e) {
-        const m = (e?.message || String(e) || "").toLowerCase();
-        const isDup =
-          m.includes("already registered") ||
-          m.includes("already exists") ||
-          m.includes("user already") ||
-          m.includes("duplicate") ||
-          (m.includes("email") && m.includes("exists"));
-
-        if (state.authTab === "signup" && isDup) {
-          msg.textContent = "이미 가입된 이메일입니다. 로그인으로 진행해 주세요.";
-          alert("이미 가입된 이메일입니다. 로그인으로 진행해 주세요.");
-          setFoot("이미 가입된 이메일입니다.");
-        } else {
-          msg.textContent = e.message || String(e);
-          setFoot("요청에 실패했습니다.");
-          alert(e.message || String(e));
-        }
+        msg.textContent = e.message || String(e);
+        setFoot("요청에 실패했습니다.");
       }
     }
   });
@@ -659,7 +644,7 @@ function renderAuth() {
   ]));
 }
 
-/* Company */
+/* ===== Company ===== */
 function renderCompanySelect() {
   const list = el("div", { class: "list", style: "margin-top:12px;" });
   root.appendChild(el("section", { class: "card" }, [
@@ -710,7 +695,7 @@ function renderCompanySelect() {
   })();
 }
 
-/* Mode */
+/* ===== Mode ===== */
 function renderModeSelect() {
   root.appendChild(el("section", { class: "card" }, [
     el("div", { class: "label", text: "모드 선택" }),
@@ -721,7 +706,7 @@ function renderModeSelect() {
   ]));
 }
 
-/* Job */
+/* ===== Job ===== */
 function renderJobSelect() {
   const modeLabel = (state.mode === "density") ? "농도" : "비산";
   const search = el("input", { class: "input", placeholder: "공사명 검색" });
@@ -792,6 +777,7 @@ function renderJobCreate() {
   const address = el("input", { class: "input", placeholder: "현장주소(선택)" });
   const contractor = el("input", { class: "input", placeholder: "해체업체(선택)" });
   const msg = el("div", { style: "margin-top:10px; color:#666; font-size:13px;" });
+  msg.textContent = state.authMsg || "";
 
   root.appendChild(el("section", { class: "card" }, [
     el("div", { class: "label", text: `새 작업 생성 · ${modeLabel}` }),
@@ -826,7 +812,7 @@ function renderJobCreate() {
   ]));
 }
 
-/* Job work */
+/* ===== Job work ===== */
 function renderJobWork() {
   const modeLabel = (state.mode === "density") ? "농도" : "비산";
 
@@ -852,6 +838,7 @@ function renderJobWork() {
     ])
   ]));
 
+  // date tabs
   const addDate = el("input", { class: "input", type: "date", value: state.activeDate || new Date().toISOString().slice(0, 10) });
   const btnGoDate = el("button", {
     class: "btn small",
@@ -891,6 +878,7 @@ function renderJobWork() {
   const dateISO = state.activeDate || new Date().toISOString().slice(0, 10);
   const samples = state.samplesByDate.get(dateISO) || [];
 
+  // add sample panel
   root.appendChild(el("section", { class: "card" }, [
     el("div", { class: "row space" }, [
       el("div", { class: "col" }, [
@@ -908,6 +896,7 @@ function renderJobWork() {
     ...(state.addOpen ? [renderAddSamplePanel(dateISO)] : []),
   ]));
 
+  // samples list
   if (!samples.length) {
     root.appendChild(el("section", { class: "card" }, [
       el("div", { class: "label", text: "안내" }),
@@ -930,7 +919,7 @@ function renderAddSamplePanel(dateISO) {
     ? (() => {
       const sel = el("select", { class: "input" }, options.map(x => el("option", { value: x, text: x })));
       sel.value = state.addLoc || options[0];
-      state.addLoc = sel.value;
+      state.addLoc = sel.value; // 초기값 저장
       sel.addEventListener("change", () => { state.addLoc = sel.value; });
       return sel;
     })()
@@ -1046,6 +1035,7 @@ function renderMiniSlot(sample, role) {
   sample._thumbUrl = sample._thumbUrl || {};
 
   const status = sample._photoState[role] || (sample._photoPath[role] ? "done" : "empty");
+
   if (status === "done" && sample._photoPath[role]) ensureThumbUrl(sample, role);
 
   const head = el("div", { class: "slotHead" }, [
@@ -1055,12 +1045,16 @@ function renderMiniSlot(sample, role) {
 
   const thumb = el("div", { class: "thumbMini" }, []);
   const url = sample._thumbUrl?.[role] || null;
-
   if (url) {
-    thumb.appendChild(el("img", { src: url, alt: roleLabel(role) }));
-    thumb.classList.add("clickable");
-    thumb.addEventListener("click", () => {
-      openPreview(sample, role).catch(console.error);
+    const img = el("img", { src: url, alt: roleLabel(role) });
+    thumb.appendChild(img);
+    thumb.style.cursor = "pointer";
+    thumb.title = "누르면 미리보기가 열립니다.";
+    thumb.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const dateISO = state.activeDate || sample.measurement_date;
+      openViewer(dateISO, sample.id, role);
     });
   } else {
     thumb.appendChild(el("div", { text: "사진 없음" }));
@@ -1074,13 +1068,10 @@ function renderMiniSlot(sample, role) {
   return el("div", { class: "slotMini" }, [head, thumb, btns]);
 }
 
-/* Boot */
+/* ===== Boot ===== */
 (async function main() {
   try {
     await loadSession();
-
-    // 초기 모달 상태
-    setModalModePreview(false);
 
     supabase.auth.onAuthStateChange(async (_event, session) => {
       state.user = session?.user || null;
