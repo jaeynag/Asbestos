@@ -59,10 +59,10 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
 .dot.blink{ animation: blink 1s infinite; }
 @keyframes blink{ 0%,100%{ opacity:1 } 50%{ opacity:.25 } }
 
-/* Auth tabs */
+/* ===== Auth tabs ===== */
 .authTabs{ display:flex; gap:8px; margin-top:8px; }
 
-/* X 버튼: 카드 안쪽 */
+/* ===== 삭제(X) 버튼: 카드 안쪽 고정 ===== */
 .xBtn{
   position:absolute;
   left:10px;
@@ -82,15 +82,16 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
 }
 .xBtn:active{ filter:brightness(0.97); }
 
-/* sample row */
+/* ===== Compact sample row ===== */
 .sampleRow{
   position:relative;
   display:flex;
+  flex-wrap:wrap;
   align-items:center;
   justify-content:space-between;
   gap:10px;
   padding:10px 12px;
-  padding-left:44px;
+  padding-left:44px;           /* X 자리 */
   border:1px solid var(--line);
   border-radius:12px;
   background:#fff;
@@ -127,6 +128,9 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   display:flex;
   gap:10px;
   align-items:center;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+  margin-left:auto;
 }
 
 .slotMini{
@@ -136,7 +140,7 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   align-items:flex-end;
 }
 
-/* dot을 라벨 옆으로 */
+/* 닷을 라벨 옆으로 */
 .slotHead{
   display:flex;
   align-items:center;
@@ -158,6 +162,7 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   justify-content:center;
   font-size:11px;
   color:var(--muted);
+  position:relative;
 }
 .thumbMini img{
   width:100%;
@@ -165,23 +170,73 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   object-fit:cover;
 }
 
-.thumbMini.clickable{ cursor:pointer; }
-.thumbMini.clickable:hover{ filter:brightness(0.98); }
-
 .slotBtns{
   display:flex;
   gap:6px;
 }
 
-/* Modal */
+/* ===== Modal ===== */
 .modal{ position:fixed; inset:0; display:flex; align-items:center; justify-content:center; padding:16px; z-index:50; }
 .modal[hidden]{ display:none; }
 .modal-backdrop{ position:absolute; inset:0; background:rgba(0,0,0,.5); }
 .modal-card{ position:relative; width:min(720px, 100%); background:#fff; border-radius:14px; border:1px solid var(--line); overflow:hidden; }
-.modal-head{ padding:12px 12px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--line); gap:10px; }
-.modal-head-left{ display:flex; align-items:center; gap:8px; min-width:0; }
-.modal-title{ font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width: 520px; }
+.modal-head{ padding:12px 12px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--line); }
+.modal-title{ font-weight:800; }
 .modal-body{ padding:12px; display:flex; flex-direction:column; gap:10px; }
-.modal-preview{ width:100%; max-height:60vh; object-fit:contain; border-radius:10px; border:1px solid var(--line); background:#fafbfc; touch-action: pan-y; }
+.modal-preview{ width:100%; max-height:60vh; object-fit:contain; border-radius:10px; border:1px solid var(--line); background:#fafbfc; }
 .modal-meta{ font-size:12px; color:var(--muted); }
 .modal-actions{ padding:12px; display:flex; gap:10px; justify-content:flex-end; border-top:1px solid var(--line); }
+
+
+@media (max-width: 520px){
+  .root{ padding: 0 12px 14px; }
+  .sampleLeft{ min-width:0; flex-basis:100%; }
+  .sampleRight{ width:100%; }
+  .timeInput{ width: 110px; }
+  .thumbMini{ width: 86px; height: 56px; }
+}
+
+
+/* ===== Viewer modal ===== */
+.viewer-card{ width:min(900px, 100%); }
+.viewer-head-left{ display:flex; flex-direction:column; gap:4px; }
+.viewer-label{ font-size:12px; color:var(--muted); }
+.viewer-head-right{ display:flex; gap:8px; }
+
+.viewer-body{
+  position:relative;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:10px;
+  padding:12px;
+}
+.viewer-img{
+  width:100%;
+  max-height:70vh;
+  object-fit:contain;
+  border-radius:12px;
+  border:1px solid var(--line);
+  background:#fafbfc;
+}
+.viewer-img.zoom2{
+  object-fit:contain;
+  transform: scale(1.8);
+  transform-origin:center;
+}
+.viewer-nav{
+  width:40px;
+  height:40px;
+  border-radius:999px;
+  border:1px solid var(--line);
+  background:#fff;
+  color:#111;
+  font-size:26px;
+  line-height:38px;
+  cursor:pointer;
+}
+.viewer-nav:disabled{ opacity:.35; cursor:not-allowed; }
+
+@media (max-width: 520px){
+  .viewer-nav{ width:34px; height:34px; font-size:22px; line-height:32px; }
+}
