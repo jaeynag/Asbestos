@@ -251,13 +251,26 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   }
 
   /* 날짜 컨트롤 */
-  .dateControls{ flex-wrap:nowrap; }       /* 한 줄 유지 */
-  .dateControls .dateCol{ flex-basis:auto; } /* 100% 해제 */
-  .dateControls .btn{ width:auto; }        /* 100% 해제 */
+  .dateControls{
+    flex-wrap: nowrap;      /* 한 줄 고정 */
+    align-items: stretch;
+    gap: 8px;
+  }
+  .dateControls .dateCol{
+    flex: 1 1 auto;         /* 날짜 input이 남는 폭 먹게 */
+    min-width: 0;
+    flex-basis: auto;       /* 100% 금지 */
+  }
+  .dateControls .btn{
+    width: auto;            /* 100% 금지 */
+    flex: 0 0 auto;         /* 버튼은 내용만큼 */
+    white-space: nowrap;    /* “이 날짜로 이동” 줄바꿈 금지 */
+  }
 
   /* 뷰어 버튼 */
   .viewer-nav{ width:34px; height:34px; font-size:22px; line-height:32px; }
 }
+
 
 
 
