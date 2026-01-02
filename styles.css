@@ -251,12 +251,14 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   }
 
   /* 날짜 컨트롤 */
-  .dateControls .dateCol{ min-width: 0; flex-basis: 100%; }
-  .dateControls .btn{ width:100%; }
+  .dateControls{ flex-wrap:nowrap; }       /* 한 줄 유지 */
+  .dateControls .dateCol{ flex-basis:auto; } /* 100% 해제 */
+  .dateControls .btn{ width:auto; }        /* 100% 해제 */
 
   /* 뷰어 버튼 */
   .viewer-nav{ width:34px; height:34px; font-size:22px; line-height:32px; }
 }
+
 
 
 
