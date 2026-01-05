@@ -309,3 +309,118 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
     width: auto !important;
   }
 }
+/* ===== 안전장치: hidden 속성은 무조건 display:none ===== */
+[hidden] { display: none !important; }
+
+/* ===== slotInline(농도) 배치 고정 ===== */
+.slotInline{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap:8px;
+  width:100%;
+}
+
+/* 썸네일 이미지가 블록으로 렌더되면서 레이아웃 깨지는 것 방지 */
+.thumbMini img{ display:block; max-width:100%; max-height:100%; }
+
+/* ===== 모달이 모바일에서 본문으로 흘러내리는 문제 방지 ===== */
+.modal{
+  position:fixed;
+  inset:0;
+  z-index:50;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:16px;
+}
+.modal-backdrop{
+  position:absolute;
+  inset:0;
+  background:rgba(0,0,0,.45);
+}
+.modal-card{
+  position:relative;
+  width:min(520px, 100%);
+  background:#fff;
+  border:1px solid var(--line);
+  border-radius:14px;
+  box-shadow: 0 20px 50px rgba(0,0,0,0.18);
+  overflow:hidden;
+}
+.modal-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  padding:12px;
+  border-bottom:1px solid var(--line);
+}
+.modal-title{ font-weight:900; }
+.modal-body{ padding:12px; }
+.modal-meta{ margin-top:8px; font-size:12px; color:var(--muted); }
+.modal-actions{
+  display:flex;
+  justify-content:flex-end;
+  gap:8px;
+  padding:12px;
+  border-top:1px solid var(--line);
+}
+
+/* 업로드 확인 모달 미리보기 */
+.modal-preview{
+  width:100%;
+  height:auto;
+  max-height:60vh;
+  object-fit:contain;
+  border-radius:12px;
+  border:1px solid var(--line);
+  background:#fff;
+}
+
+/* ===== 뷰어 모달(썸네일 클릭) ===== */
+.viewer-card{ width:min(820px, 100%); }
+.viewer-head-left{ display:flex; flex-direction:column; gap:2px; }
+.viewer-label{ font-size:12px; color:var(--muted); }
+
+.viewer-body{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:10px;
+  padding:10px;
+  overflow:auto; /* zoom2 대비 */
+}
+.viewer-img{
+  max-width:100%;
+  max-height:75vh;
+  object-fit:contain;
+  border-radius:12px;
+  border:1px solid var(--line);
+  background:#fff;
+}
+.viewer-img.zoom2{
+  transform:scale(2);
+  transform-origin:center;
+}
+
+/* (없으면 버튼이 이상해져서) */
+.viewer-nav{
+  width:40px;
+  height:40px;
+  border-radius:12px;
+  border:1px solid var(--line);
+  background:#fff;
+  cursor:pointer;
+  font-size:26px;
+  line-height:38px;
+}
+.viewer-nav:disabled{ opacity:.45; cursor:not-allowed; }
+
+/* ===== danger 버튼 ===== */
+.btn.danger{
+  border-color: var(--danger);
+  color: var(--danger);
+  background:#fff;
+}
+
