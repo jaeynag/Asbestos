@@ -618,6 +618,67 @@ async function deleteSample(sample) {
     alert(e.message || String(e));
   }
 }
+/** 현장 삭제(샘플/사진/스토리지까지 정리) */
+async function deleteJobAndRelated(job) {
+  const msg =
+`현장을 삭제하시겠습니까?
+
+- 현장: ${job.project_name}
+- 해당 현장의 시료/사진 데이터가 모두 삭제됩니다.
+- 스토리지(버킷) 사진도 함께 삭제를 시도합니다.`;
+
+  if (!confirm(msg)) return;
+
+  try {
+    setFoot("현장 삭제를 진행 중입니다...");
+
+    // 1) 샘플 로드
+    const samples = await fetchSamples(job.id);
+    const sampleIds = (samples || []).map(s => s.id);
+
+    // 2) 사진 경로 가져오기 + 스토리지 삭제
+    if (sampleIds.length) {
+      const photos = await fetchPhotosForSamples(sampleIds);
+      const paths = (photos || []).map(p => p.storage_path).filter(Boolean);
+
+      if (paths.length) {
+        const { error: rmErr } = await supabase.storage.from(BUCKET).remove(paths);
+        // 권한/RLS로 막힐 수도 있어서, 스토리지 삭제 실패는 "경고"로만 처리
+        if (rmErr) console.warn("스토리지 사진 삭제 실패:", rmErr);
+      }
+
+      // 3) 사진 row 삭제
+      {
+        const { error } = await supabase.from("sample_photos").delete().in("sample_id", sampleIds);
+        if (error) throw error;
+      }
+
+      // 4) 샘플 삭제
+      {
+        const { error } = await supabase.from("job_samples").delete().eq("job_id", job.id);
+        if (error) throw error;
+      }
+    }
+
+    // 5) 현장 삭제
+    {
+      const { error } = await supabase.from("jobs").delete().eq("id", job.id);
+      if (error) throw error;
+    }
+
+    // 화면 상태 정리
+    if (state.job?.id === job.id) {
+      state.job = null;
+    }
+    setFoot("현장 삭제가 완료되었습니다.");
+    render();
+  } catch (e) {
+    console.error(e);
+    setFoot(`현장 삭제에 실패했습니다: ${e.message || e}`);
+    alert(e.message || String(e));
+  }
+}
+
 
 async function loadJob(job) {
   state.job = job;
@@ -846,6 +907,19 @@ function renderJobSelect() {
         ]),
         el("div", { class: "row", style: "align-items:center; gap:8px;" }, [
           (j.status === "new") ? el("span", { class: "badge-new", text: "NEW" }) : el("span", { style: "display:none;" }),
+
+          el("button", {
+            class: "btn small danger",
+            text: "삭제",
+            onclick: async (ev) => {
+              ev.preventDefault();
+              ev.stopPropagation();
+              await deleteJobAndRelated(j);
+               // 목록 다시 로드
+              refresh().catch(e => alert(e.message || String(e)));
+            }
+          }),
+
           el("button", {
             class: "btn primary small",
             text: "열기",
@@ -1198,3 +1272,4 @@ function renderMiniSlot(sample, role) {
     root.appendChild(el("div", { class: "card", text: e.message || String(e) }));
   }
 })();
+
