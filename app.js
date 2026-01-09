@@ -174,6 +174,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
  *  ========================= */
 const db = {
   schema: null,          // null | "measurement"
+  companyTable: \"companies\",
   jobTable: null,        // "jobs" ...
   sampleTable: null,     // "samples" ...
   photoTable: null,      // "job_photos" ...
@@ -280,6 +281,8 @@ const state = {
   view: "boot", // boot | login | jobs | samples
   company: localStorage.getItem(LS.company) || "대한",
   mode: localStorage.getItem(LS.mode) || "density", // density | scatter
+  companyId: null,
+  companies: [],
   jobs: [],
   job: null,
   samples: [],
@@ -494,38 +497,84 @@ function sampleDisplay(s) {
   return { title, loc, start, end };
 }
 
+async function loadCompanies() {
+  await detectDb();
+  // Try to fetch companies (id,name). If table doesn't exist or RLS blocks, ignore.
+  const { data, error } = await sbFrom(db.schema, db.companyTable).select("id,name").order("name", { ascending: true }).limit(50);
+  if (error) {
+    // fallback: keep empty; jobs may still be accessible without company_id filter
+    state.companies = [];
+    state.companyId = null;
+    return;
+  }
+  state.companies = data || [];
+  // Choose companyId by matching name to state.company label
+  const want = String(state.company || "");
+  const pickCompany =
+    state.companies.find(c => String(c.name || "").includes(want)) ||
+    (want === "일오"
+      ? state.companies.find(c => String(c.name || "").includes("1호") || String(c.name || "").includes("일오"))
+      : null) ||
+    (want === "대한"
+      ? state.companies.find(c => String(c.name || "").includes("대한"))
+      : null) ||
+    state.companies[0] ||
+    null;
+  state.companyId = pickCompany ? pickCompany.id : null;
+}
+
 async function loadJobs() {
   setStatus("현장 목록 불러오는 중...", "busy");
   await detectDb();
+  await loadCompanies();
 
-  // pull jobs
-  const { data, error } = await sbFrom(db.schema, db.jobTable).select("*").limit(200);
+  // Build mode filter candidates (DB가 'C'/'S' 또는 한글을 쓰는 케이스까지 커버)
+  const modeKey = state.mode;
+  const modes = modeKey === "scatter"
+    ? ["scatter","SCATTER","scat","SCAT","S","s","비산"]
+    : ["density","DENSITY","conc","CONC","C","c","농도","concentration","CONCENTRATION"];
+
+  // Query jobs with server-side filters when columns exist
+  let q = sbFrom(db.schema, db.jobTable)
+    .select("id,company_id,mode,project_name,address,contractor,status,created_at,last_upload_at")
+    .order("last_upload_at", { ascending: false, nullsFirst: false })
+    .order("created_at", { ascending: false })
+    .limit(50);
+
+  // company_id filter (가능하면)
+  if (state.companyId) q = q.eq("company_id", state.companyId);
+
+  // mode filter (가능하면)
+  q = q.in("mode", modes);
+
+  const { data, error } = await q;
   if (error) {
-    setStatus(`현장 불러오기 실패: ${error.message}`, "error");
-    state.jobs = [];
+    // fallback: if RLS/컬럼/필터 문제면 최소 쿼리로 한 번 더 시도
+    const { data: d2, error: e2 } = await sbFrom(db.schema, db.jobTable).select("*").limit(200);
+    if (e2) {
+      setStatus(`현장 불러오기 실패: ${e2.message}`, "error");
+      state.jobs = [];
+      render();
+      return;
+    }
+    // client-side filter fallback
+    const filtered = (d2 || []).filter(j => {
+      const m = String(j?.mode || "").toLowerCase();
+      const okMode = modes.map(x => x.toLowerCase()).includes(m) || (modeKey === "density" ? m.includes("농도") : m.includes("비산"));
+      const okCompany = !state.companyId || String(j?.company_id || "") === String(state.companyId);
+      return okMode && okCompany;
+    });
+    state.jobs = filtered;
+    setStatus(`현장 ${state.jobs.length}건 (${state.company}/${modeLabel(state.mode)})`);
     render();
     return;
   }
 
-  // client-side filter by company/mode when fields exist
-  const filtered = (data || []).filter(j => {
-    const d = jobDisplay(j);
-    const okCompany = !d.company || d.company === state.company;
-    const okMode = !d.mode || d.mode === state.mode;
-    return okCompany && okMode;
-  });
-
-  // sort by created_at/date desc when available
-  filtered.sort((a, b) => {
-    const da = pick(a, ["work_date", "date", "created_at", "updated_at"], "");
-    const dbb = pick(b, ["work_date", "date", "created_at", "updated_at"], "");
-    return String(dbb).localeCompare(String(da));
-  });
-
-  state.jobs = filtered;
+  state.jobs = data || [];
   setStatus(`현장 ${state.jobs.length}건 (${state.company}/${modeLabel(state.mode)})`);
   render();
 }
+
 
 async function loadSamplesAndPhotos() {
   if (!state.job) return;
