@@ -186,11 +186,14 @@ function sbFrom(schema, table) {
 
 async function trySelect(schema, table) {
   try {
-    const { data, error } = await sbFrom(schema, table).select("*").limit(1);
-    if (error) return { ok: false, error };
-    return { ok: true, data };
+    const { data, error } = await sbFrom(schema, table).select("*").limit(2);
+    if (error) return { ok: false, error, rows: 0, sample: null, keys: [] };
+    const rows = Array.isArray(data) ? data.length : 0;
+    const sample = rows ? data[0] : null;
+    const keys = sample ? Object.keys(sample) : [];
+    return { ok: true, data, rows, sample, keys };
   } catch (e) {
-    return { ok: false, error: e };
+    return { ok: false, error: e, rows: 0, sample: null, keys: [] };
   }
 }
 
@@ -203,25 +206,64 @@ async function detectDb() {
   const sampleCandidates = ["samples", "air_samples", "air_sample"];
   const photoCandidates = ["job_photos", "photos", "sample_photos"];
 
+  const jobKeyHints = ["site_name", "job_name", "project_name", "name", "work_date", "date", "created_at"];
+  const sampleKeyHints = ["job_id", "site_id", "sample_no", "sample_num", "seq", "fiber", "flow", "volume", "count"];
+  const photoKeyHints = ["storage_path", "path", "sample_id", "job_id", "role", "kind", "created_at"];
+
+  const scoreKeys = (keys, hints) => {
+    if (!Array.isArray(keys) || !keys.length) return 0;
+    let s = 0;
+    for (const h of hints) {
+      if (keys.includes(h)) s += 1;
+    }
+    return s;
+  };
+
+  const pickBestTable = async (schema, candidates, hints) => {
+    let best = null;
+    for (const t of candidates) {
+      const r = await trySelect(schema, t);
+      if (!r.ok) continue;
+      // Prefer tables that actually return rows for this user (avoid picking empty tables that merely exist)
+      const score = (r.rows > 0 ? 100 : 0) + scoreKeys(r.keys, hints);
+      const cand = { table: t, score, rows: r.rows, keys: r.keys };
+      if (!best || cand.score > best.score) best = cand;
+    }
+    return best;
+  };
+
+  let bestSchema = null;
+  let bestPack = null;
+  let bestTotal = -1;
+
   for (const sc of schemas) {
-    for (const t of jobCandidates) {
-      const r = await trySelect(sc, t);
-      if (r.ok) { db.schema = sc; db.jobTable = t; break; }
+    const bj = await pickBestTable(sc, jobCandidates, jobKeyHints);
+    const bs = await pickBestTable(sc, sampleCandidates, sampleKeyHints);
+    const bp = await pickBestTable(sc, photoCandidates, photoKeyHints);
+
+    if (!bj || !bs || !bp) continue;
+    const total = bj.score + bs.score + bp.score;
+
+    if (total > bestTotal) {
+      bestTotal = total;
+      bestSchema = sc;
+      bestPack = { bj, bs, bp };
     }
-    for (const t of sampleCandidates) {
-      const r = await trySelect(sc, t);
-      if (r.ok) { db.schema = sc; db.sampleTable = t; break; }
-    }
-    for (const t of photoCandidates) {
-      const r = await trySelect(sc, t);
-      if (r.ok) { db.schema = sc; db.photoTable = t; break; }
-    }
-    if (db.jobTable && db.sampleTable && db.photoTable) break;
   }
 
-  if (!db.jobTable) db.jobTable = "jobs";
-  if (!db.sampleTable) db.sampleTable = "samples";
-  if (!db.photoTable) db.photoTable = "job_photos";
+  if (bestPack) {
+    db.schema = bestSchema;
+    db.jobTable = bestPack.bj.table;
+    db.sampleTable = bestPack.bs.table;
+    db.photoTable = bestPack.bp.table;
+    return;
+  }
+
+  // fallback
+  db.schema = null;
+  db.jobTable = db.jobTable || "jobs";
+  db.sampleTable = db.sampleTable || "samples";
+  db.photoTable = db.photoTable || "job_photos";
 }
 
 /** =========================
