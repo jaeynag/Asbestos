@@ -1,5 +1,6 @@
 // app.js (NAS Gateway + resize integrated)
-// v20260109-nas
+// v20260112-nas-fixed
+// NOTE: This file is meant to be hosted on GitHub Pages (static). NAS runs only the /asb gateway API.
 
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 
@@ -47,9 +48,7 @@ function el(tag, attrs = {}, ...children) {
 function fmtDateLike(v) {
   if (!v) return "";
   const s = String(v);
-  // 2026-01-09T12:34:56 -> 2026-01-09
   if (s.includes("T")) return s.split("T", 1)[0];
-  // 20260109 -> 2026-01-09
   if (/^\d{8}$/.test(s)) return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
   return s.slice(0, 10);
 }
@@ -81,7 +80,7 @@ const modal = {
   btnClose: $("#modalClose"),
   btnReject: $("#modalReject"),
   btnAccept: $("#modalAccept"),
-  current: null, // { file, onAccept, onReject }
+  current: null,
 };
 
 function modalOpen({ title, imgUrl, metaHtml, onAccept, onReject }) {
@@ -127,7 +126,7 @@ const viewer = {
   btnNext: $("#viewerNext"),
   btnZoom: $("#viewerZoom"),
   btnClose: $("#viewerClose"),
-  items: [], // [{url,label}]
+  items: [],
   idx: 0,
   zoomed: false,
 };
@@ -170,14 +169,15 @@ viewer.btnZoom?.addEventListener("click", () => { viewer.zoomed = !viewer.zoomed
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 /** =========================
- *  Schema/table detection (best-effort)
+ *  Schema/table detection + column detection
  *  ========================= */
 const db = {
-  schema: null,          // null | "measurement"
-  companyTable: \"companies\",
-  jobTable: null,        // "jobs" ...
-  sampleTable: null,     // "samples" ...
-  photoTable: null,      // "job_photos" ...
+  schema: null,                 // null | "measurement"
+  companyTable: "companies",
+  jobTable: null,
+  sampleTable: null,
+  photoTable: null,
+  jobCols: null,                // detected columns for jobs table
 };
 
 function sbFrom(schema, table) {
@@ -199,7 +199,6 @@ async function trySelect(schema, table) {
 }
 
 async function detectDb() {
-  // avoid re-detect
   if (db.jobTable && db.sampleTable && db.photoTable) return;
 
   const schemas = [null, "measurement"];
@@ -214,9 +213,7 @@ async function detectDb() {
   const scoreKeys = (keys, hints) => {
     if (!Array.isArray(keys) || !keys.length) return 0;
     let s = 0;
-    for (const h of hints) {
-      if (keys.includes(h)) s += 1;
-    }
+    for (const h of hints) if (keys.includes(h)) s += 1;
     return s;
   };
 
@@ -225,7 +222,8 @@ async function detectDb() {
     for (const t of candidates) {
       const r = await trySelect(schema, t);
       if (!r.ok) continue;
-      // Prefer tables that actually return rows for this user (avoid picking empty tables that merely exist)
+
+      // Prefer tables returning rows (but still allow empty tables if they have strong keys)
       const score = (r.rows > 0 ? 100 : 0) + scoreKeys(r.keys, hints);
       const cand = { table: t, score, rows: r.rows, keys: r.keys };
       if (!best || cand.score > best.score) best = cand;
@@ -241,10 +239,9 @@ async function detectDb() {
     const bj = await pickBestTable(sc, jobCandidates, jobKeyHints);
     const bs = await pickBestTable(sc, sampleCandidates, sampleKeyHints);
     const bp = await pickBestTable(sc, photoCandidates, photoKeyHints);
-
     if (!bj || !bs || !bp) continue;
-    const total = bj.score + bs.score + bp.score;
 
+    const total = bj.score + bs.score + bp.score;
     if (total > bestTotal) {
       bestTotal = total;
       bestSchema = sc;
@@ -257,23 +254,24 @@ async function detectDb() {
     db.jobTable = bestPack.bj.table;
     db.sampleTable = bestPack.bs.table;
     db.photoTable = bestPack.bp.table;
-    return;
+  } else {
+    db.schema = null;
+    db.jobTable = "jobs";
+    db.sampleTable = "samples";
+    db.photoTable = "job_photos";
   }
 
-  // fallback
-  db.schema = null;
-  db.jobTable = db.jobTable || "jobs";
-  db.sampleTable = db.sampleTable || "samples";
-  db.photoTable = db.photoTable || "job_photos";
+  // detect job columns (to avoid selecting/filtering non-existent columns)
+  const jr = await trySelect(db.schema, db.jobTable);
+  db.jobCols = jr.keys || [];
 }
+
+function hasJobCol(c) { return Array.isArray(db.jobCols) && db.jobCols.includes(c); }
 
 /** =========================
  *  Auth + Settings
  *  ========================= */
-const LS = {
-  company: "asb_company",
-  mode: "asb_mode",
-};
+const LS = { company: "asb_company", mode: "asb_mode" };
 
 const state = {
   session: null,
@@ -286,7 +284,7 @@ const state = {
   jobs: [],
   job: null,
   samples: [],
-  photosBySample: new Map(), // sample_id -> { role: [photoRecord...] }
+  photosBySample: new Map(),
 };
 
 function saveSettings() {
@@ -294,12 +292,9 @@ function saveSettings() {
   localStorage.setItem(LS.mode, state.mode);
 }
 
-function modeLabel(m) {
-  return m === "scatter" ? "비산" : "농도";
-}
+function modeLabel(m) { return m === "scatter" ? "비산" : "농도"; }
 
 function roleLabels(mode) {
-  // 농도: start/end, 비산: before/after (CSS comment: scatter 2칸)
   return mode === "scatter"
     ? [{ key: "before", label: "작업 전" }, { key: "after", label: "작업 후" }]
     : [{ key: "start", label: "시작" }, { key: "end", label: "종료" }];
@@ -365,7 +360,6 @@ async function getAccessToken() {
 async function resizeImageToJpeg(file, maxSide = RESIZE_MAX_SIDE, quality = RESIZE_QUALITY) {
   try {
     if (!file || !file.type || !file.type.startsWith("image/")) return file;
-
     const bitmap = await createImageBitmap(file).catch(() => null);
     if (!bitmap) return file;
 
@@ -398,8 +392,8 @@ async function getSignedUrl(storagePath, ttlSec = 1800) {
   if (storagePath.startsWith("nas:") || STORAGE_BACKEND === "nas") {
     const token = await getAccessToken();
     if (!token) throw new Error("로그인이 필요함");
-
     const rel = storagePath.startsWith("nas:") ? storagePath.slice(4) : storagePath;
+
     const r = await fetch(`${NAS_GATEWAY_URL}/sign`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
@@ -413,11 +407,8 @@ async function getSignedUrl(storagePath, ttlSec = 1800) {
     return j?.url || null;
   }
 
-  // fallback: if it's an http(s) URL already
   if (storagePath.startsWith("http://") || storagePath.startsWith("https://")) return storagePath;
 
-  // fallback: Supabase Storage signed URL (if used)
-  // NOTE: only works if your old records store "path inside bucket"
   try {
     const bucket = "job_photos";
     const { data, error } = await supabase.storage.from(bucket).createSignedUrl(storagePath, ttlSec);
@@ -450,12 +441,11 @@ async function uploadPhotoToNas({ jobId, sampleId, role, file }) {
     throw new Error(`NAS upload 실패: ${r.status} ${t}`);
   }
   const j = await r.json();
-  // gateway should return storage_path like "nas:...."
   return j?.storage_path || j?.path || null;
 }
 
 /** =========================
- *  Data access (best-effort)
+ *  Data access helpers
  *  ========================= */
 function pick(obj, keys, fallback = "") {
   for (const k of keys) {
@@ -472,19 +462,23 @@ function normalizeCompany(v) {
   return s;
 }
 
-function normalizeMode(v) {
-  const s = String(v || "").toLowerCase();
+function normalizeModeFromRecord(rec) {
+  const raw = pick(rec, ["mode", "work_mode", "task", "kind", "type", "job_type", "work_type"], "");
+  const s = String(raw || "").toLowerCase();
   if (!s) return "";
   if (s.includes("scatter") || s.includes("비산")) return "scatter";
   if (s.includes("density") || s.includes("농도")) return "density";
-  return s;
+  // short codes
+  if (s === "s") return "scatter";
+  if (s === "c") return "density";
+  return "";
 }
 
 function jobDisplay(job) {
   const name = pick(job, ["site_name", "site", "name", "job_name", "project_name"], `현장 ${safeIdShort(job?.id)}`);
-  const d = fmtDateLike(pick(job, ["work_date", "date", "created_at", "updated_at"], ""));
-  const company = normalizeCompany(pick(job, ["company", "company_name", "company_id"], "")) || "";
-  const mode = normalizeMode(pick(job, ["mode", "work_mode", "task", "kind"], "")) || "";
+  const d = fmtDateLike(pick(job, ["work_date", "date", "created_at", "updated_at", "last_upload_at"], ""));
+  const company = normalizeCompany(pick(job, ["company", "company_name"], "")) || "";
+  const mode = normalizeModeFromRecord(job) || "";
   return { name, date: d, company, mode };
 }
 
@@ -499,16 +493,13 @@ function sampleDisplay(s) {
 
 async function loadCompanies() {
   await detectDb();
-  // Try to fetch companies (id,name). If table doesn't exist or RLS blocks, ignore.
   const { data, error } = await sbFrom(db.schema, db.companyTable).select("id,name").order("name", { ascending: true }).limit(50);
   if (error) {
-    // fallback: keep empty; jobs may still be accessible without company_id filter
     state.companies = [];
     state.companyId = null;
     return;
   }
   state.companies = data || [];
-  // Choose companyId by matching name to state.company label
   const want = String(state.company || "");
   const pickCompany =
     state.companies.find(c => String(c.name || "").includes(want)) ||
@@ -528,53 +519,77 @@ async function loadJobs() {
   await detectDb();
   await loadCompanies();
 
-  // Build mode filter candidates (DB가 'C'/'S' 또는 한글을 쓰는 케이스까지 커버)
-  const modeKey = state.mode;
-  const modes = modeKey === "scatter"
-    ? ["scatter","SCATTER","scat","SCAT","S","s","비산"]
-    : ["density","DENSITY","conc","CONC","C","c","농도","concentration","CONCENTRATION"];
+  const wantMode = state.mode;
+  const modes = wantMode === "scatter"
+    ? ["scatter","SCATTER","S","s","비산"]
+    : ["density","DENSITY","C","c","농도","concentration","CONCENTRATION"];
 
-  // Query jobs with server-side filters when columns exist
+  // Build a safe select list (only existing cols)
+  const selCols = ["id"];
+  const addIf = (c) => { if (hasJobCol(c) && !selCols.includes(c)) selCols.push(c); };
+
+  // common fields for display/filter
+  ["site_name","job_name","project_name","name","work_date","date","mode","work_mode","task","kind","type","job_type","work_type",
+   "company_id","company","company_name","created_at","updated_at","last_upload_at"].forEach(addIf);
+
   let q = sbFrom(db.schema, db.jobTable)
-    .select("id,company_id,mode,project_name,address,contractor,status,created_at,last_upload_at")
-    .order("last_upload_at", { ascending: false, nullsFirst: false })
-    .order("created_at", { ascending: false })
-    .limit(50);
+    .select(selCols.join(","))
+    .limit(300);
 
-  // company_id filter (가능하면)
-  if (state.companyId) q = q.eq("company_id", state.companyId);
+  // Order preference
+  if (hasJobCol("last_upload_at")) q = q.order("last_upload_at", { ascending: false, nullsFirst: false });
+  else if (hasJobCol("updated_at")) q = q.order("updated_at", { ascending: false });
+  else if (hasJobCol("created_at")) q = q.order("created_at", { ascending: false });
 
-  // mode filter (가능하면)
-  q = q.in("mode", modes);
+  // Server-side filters only if the column exists
+  if (state.companyId && hasJobCol("company_id")) q = q.eq("company_id", state.companyId);
+  // Only filter if job table truly has a dedicated mode column (otherwise do client-side)
+  const modeCol = hasJobCol("mode") ? "mode" : (hasJobCol("work_mode") ? "work_mode" : null);
+  if (modeCol) q = q.in(modeCol, modes);
 
   const { data, error } = await q;
+
+  let rows = data || [];
   if (error) {
-    // fallback: if RLS/컬럼/필터 문제면 최소 쿼리로 한 번 더 시도
-    const { data: d2, error: e2 } = await sbFrom(db.schema, db.jobTable).select("*").limit(200);
-    if (e2) {
-      setStatus(`현장 불러오기 실패: ${e2.message}`, "error");
+    // fallback: pull a wider rowset and filter client-side using multiple columns
+    const r2 = await sbFrom(db.schema, db.jobTable).select("*").limit(500);
+    if (r2.error) {
+      setStatus(`현장 불러오기 실패: ${r2.error.message}`, "error");
       state.jobs = [];
       render();
       return;
     }
-    // client-side filter fallback
-    const filtered = (d2 || []).filter(j => {
-      const m = String(j?.mode || "").toLowerCase();
-      const okMode = modes.map(x => x.toLowerCase()).includes(m) || (modeKey === "density" ? m.includes("농도") : m.includes("비산"));
-      const okCompany = !state.companyId || String(j?.company_id || "") === String(state.companyId);
-      return okMode && okCompany;
-    });
-    state.jobs = filtered;
-    setStatus(`현장 ${state.jobs.length}건 (${state.company}/${modeLabel(state.mode)})`);
-    render();
-    return;
+    rows = r2.data || [];
   }
 
-  state.jobs = data || [];
-  setStatus(`현장 ${state.jobs.length}건 (${state.company}/${modeLabel(state.mode)})`);
+  // Client-side filtering (robust)
+  const haveCompanyId = state.companyId && hasJobCol("company_id");
+  const filtered = rows.filter(j => {
+    const m = normalizeModeFromRecord(j);
+    const okMode = (m === "") ? true : (m === wantMode); // unknown mode -> keep (avoid dropping everything)
+
+    let okCompany = true;
+    if (haveCompanyId) {
+      okCompany = String(j?.company_id || "") === String(state.companyId);
+    } else {
+      // If we can't map company_id, try string fields. If none exist, do not filter.
+      const c = normalizeCompany(pick(j, ["company", "company_name"], ""));
+      okCompany = c ? (c === state.company) : true;
+    }
+    return okMode && okCompany;
+  });
+
+  state.jobs = filtered;
+
+  // Status note about filters
+  const notes = [];
+  if (!(state.companyId && hasJobCol("company_id"))) notes.push("회사필터: 부분적");
+  if (!modeCol) notes.push("모드필터: 부분적");
+  const noteStr = notes.length ? ` · ${notes.join(" / ")}` : "";
+
+  setStatus(`현장 ${state.jobs.length}건 (${state.company}/${modeLabel(state.mode)})${noteStr}`);
   render();
 }
-
 
 async function loadSamplesAndPhotos() {
   if (!state.job) return;
@@ -586,10 +601,8 @@ async function loadSamplesAndPhotos() {
   // samples
   let samples = [];
   {
-    // try job_id filter first; if fails, fallback to no filter (limited) but show message
     let { data, error } = await sbFrom(db.schema, db.sampleTable).select("*").eq("job_id", jobId).limit(500);
     if (error) {
-      // fallback: sometimes job key is site_id
       const r2 = await sbFrom(db.schema, db.sampleTable).select("*").eq("site_id", jobId).limit(500);
       if (!r2.error) { data = r2.data; error = null; }
     }
@@ -598,7 +611,6 @@ async function loadSamplesAndPhotos() {
       state.samples = [];
     } else {
       samples = data || [];
-      // sort by sample_no/seq if present
       samples.sort((a, b) => String(pick(a, ["sample_no", "seq", "index"], "")).localeCompare(String(pick(b, ["sample_no", "seq", "index"], ""))));
       state.samples = samples;
     }
@@ -609,7 +621,6 @@ async function loadSamplesAndPhotos() {
   {
     let { data, error } = await sbFrom(db.schema, db.photoTable).select("*").eq("job_id", jobId).limit(2000);
     if (error) {
-      // fallback: sometimes site_id
       const r2 = await sbFrom(db.schema, db.photoTable).select("*").eq("site_id", jobId).limit(2000);
       if (!r2.error) { data = r2.data; error = null; }
     }
@@ -711,7 +722,7 @@ function renderJobs() {
 
   if (!state.jobs.length) {
     root.appendChild(el("div", { class: "card" },
-      el("div", { style: "color:var(--muted)" }, "현장이 없습니다. (필터/테이블 확인 필요)")
+      el("div", { style: "color:var(--muted)" }, "현장이 없습니다. (권한/RLS 또는 컬럼명이 다를 가능성 있음)")
     ));
     return;
   }
@@ -766,7 +777,6 @@ async function renderSampleRow(sample) {
 
   const right = el("div", { class: `sampleRight ${state.mode}` });
 
-  // current photos map
   const roleMap = state.photosBySample.get(sid) || {};
 
   for (const r of roles) {
@@ -789,7 +799,6 @@ async function renderSampleRow(sample) {
       thumb.appendChild(img);
       thumb.style.cursor = "pointer";
       thumb.addEventListener("click", async () => {
-        // build viewer items for this sample across roles
         const items = [];
         for (const rr of roles) {
           const arr = roleMap[rr.key] || [];
@@ -833,13 +842,11 @@ async function renderSampleRow(sample) {
                   file
                 });
 
-                // update local photo map (optimistic)
                 if (!state.photosBySample.has(sid)) state.photosBySample.set(sid, {});
                 const rm = state.photosBySample.get(sid);
                 if (!rm[r.key]) rm[r.key] = [];
                 rm[r.key].push({ storage_path, role: r.key, sample_id: sid, job_id: state.job.id });
 
-                // re-render samples view (cheap: reload photos list from DB, but keeps consistent)
                 await sleep(150);
                 await loadSamplesAndPhotos();
                 setStatus("업로드 완료");
@@ -862,8 +869,7 @@ async function renderSampleRow(sample) {
     right.appendChild(slot);
   }
 
-  const row = el("div", { class: `sampleRow mode-${state.mode}` }, left, right);
-  return row;
+  return el("div", { class: `sampleRow mode-${state.mode}` }, left, right);
 }
 
 async function renderSamples() {
@@ -881,12 +887,11 @@ async function renderSamples() {
 
   if (!state.samples.length) {
     root.appendChild(el("div", { class: "card" },
-      el("div", { style: "color:var(--muted)" }, "시료가 없습니다. (테이블/컬럼 확인 필요)")
+      el("div", { style: "color:var(--muted)" }, "시료가 없습니다. (권한/RLS 또는 컬럼명이 다를 가능성 있음)")
     ));
     return;
   }
 
-  // render progressively to avoid blocking
   const wrap = el("div", { class: "list" });
   root.appendChild(wrap);
 
@@ -901,16 +906,12 @@ async function renderSamples() {
 
 function render() {
   menuHide();
-
   if (state.view === "login") return renderLogin();
   if (state.view === "jobs") return renderJobs();
   if (state.view === "samples") return renderSamples();
 
-  // boot
   clearRoot();
-  root.appendChild(el("div", { class: "card" },
-    el("div", { style: "color:var(--muted)" }, "초기화 중...")
-  ));
+  root.appendChild(el("div", { class: "card" }, el("div", { style: "color:var(--muted)" }, "초기화 중...")));
 }
 
 /** =========================
@@ -923,14 +924,9 @@ async function boot() {
     state.session = session;
     state.user = session?.user || null;
 
-    // show initial view
-    if (state.session) {
-      go("jobs");
-    } else {
-      go("login");
-    }
+    if (state.session) go("jobs");
+    else go("login");
 
-    // auth state listener
     supabase.auth.onAuthStateChange((_event, session2) => {
       state.session = session2;
       state.user = session2?.user || null;
