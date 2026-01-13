@@ -258,26 +258,39 @@ async function detectDb() {
  *  Auth + Settings
  *  ========================= */
 const LS = {
-  company: "asb_company",
+  // backward compatible keys
+  companyLegacy: "asb_company",
   mode: "asb_mode",
+  companyId: "asb_company_id",
+  companyName: "asb_company_name",
 };
 
 const state = {
   session: null,
   user: null,
-  view: "boot", // login | jobs | samples
-  company: localStorage.getItem(LS.company) || "대한",
-  mode: localStorage.getItem(LS.mode) || "density", // density | scatter
-  companyId: null,
+  view: "boot", // login | company | mode | jobs | samples
+
+  // company
+  companyId: localStorage.getItem(LS.companyId) || null,
+  company: localStorage.getItem(LS.companyName) || localStorage.getItem(LS.companyLegacy) || "",
   companies: [],
+
+  // mode
+  mode: localStorage.getItem(LS.mode) || "density", // density | scatter
+
+  // jobs/samples
   jobs: [],
   job: null,
+  creatingJob: false,
   samples: [],
   photosBySample: new Map(),
 };
 
 function saveSettings() {
-  localStorage.setItem(LS.company, state.company);
+  if (state.companyId) localStorage.setItem(LS.companyId, String(state.companyId));
+  if (state.company) localStorage.setItem(LS.companyName, String(state.company));
+  // keep legacy key too (older builds)
+  if (state.company) localStorage.setItem(LS.companyLegacy, String(state.company));
   localStorage.setItem(LS.mode, state.mode);
 }
 
@@ -314,18 +327,14 @@ document.addEventListener("click", (e) => {
 
 menuChangeMode?.addEventListener("click", async () => {
   menuHide();
-  state.mode = state.mode === "density" ? "scatter" : "density";
-  saveSettings();
-  if (state.view === "samples") await loadSamplesAndPhotos();
-  else if (state.view === "jobs") await loadJobs();
+  if (!state.session) return;
+  go("mode");
 });
 
 menuChangeCompany?.addEventListener("click", async () => {
   menuHide();
-  state.company = state.company === "대한" ? "일오" : "대한";
-  saveSettings();
-  if (state.view === "samples") await loadSamplesAndPhotos();
-  else if (state.view === "jobs") await loadJobs();
+  if (!state.session) return;
+  go("company");
 });
 
 menuSignOut?.addEventListener("click", async () => {
@@ -337,6 +346,7 @@ menuSignOut?.addEventListener("click", async () => {
   state.jobs = [];
   state.samples = [];
   state.photosBySample = new Map();
+  state.creatingJob = false;
   go("login");
 });
 
@@ -484,20 +494,41 @@ function sampleDisplay(s) {
 
 async function loadCompanies() {
   await detectDb();
-  const { data, error } = await sbFrom(db.schema, db.companyTable).select("id,name").order("name", { ascending: true }).limit(50);
+  const { data, error } = await sbFrom(db.schema, db.companyTable)
+    .select("id,name")
+    .order("name", { ascending: true })
+    .limit(200);
+
   if (error) {
     state.companies = [];
-    state.companyId = null;
     return;
   }
+
   state.companies = data || [];
-  const want = String(state.company || "");
-  const found =
-    state.companies.find(c => String(c.name || "").includes(want)) ||
-    (want === "일오" ? state.companies.find(c => String(c.name || "").includes("1호") || String(c.name || "").includes("일오")) : null) ||
-    (want === "대한" ? state.companies.find(c => String(c.name || "").includes("대한")) : null) ||
-    state.companies[0] || null;
-  state.companyId = found ? found.id : null;
+
+  // 1) companyId 우선
+  const wantId = state.companyId ? String(state.companyId) : null;
+  let found = null;
+  if (wantId) found = state.companies.find(c => String(c.id) === wantId) || null;
+
+  // 2) name(legacy) 매칭
+  const wantName = String(state.company || "").trim();
+  if (!found && wantName) {
+    found =
+      state.companies.find(c => String(c.name || "").includes(wantName)) ||
+      (wantName === "일오" ? state.companies.find(c => String(c.name || "").includes("1호") || String(c.name || "").includes("일오")) : null) ||
+      (wantName === "대한" ? state.companies.find(c => String(c.name || "").includes("대한")) : null) ||
+      null;
+  }
+
+  // 3) 없으면 첫 회사
+  if (!found) found = state.companies[0] || null;
+
+  if (found) {
+    state.companyId = found.id;
+    state.company = String(found.name || "");
+    saveSettings();
+  }
 }
 
 async function loadJobs() {
@@ -606,14 +637,23 @@ btnBack?.addEventListener("click", () => {
   if (state.view === "samples") {
     state.job = null;
     go("jobs");
+  } else if (state.view === "jobs") {
+    go("mode");
+  } else if (state.view === "mode") {
+    go("company");
+  } else if (state.view === "company") {
+    go("login");
   } else {
-    go("jobs");
+    go("login");
   }
 });
 
 function go(view) {
   state.view = view;
   render();
+  if (view === "company") {
+    loadCompanies().then(() => render()).catch(() => {});
+  }
   if (view === "jobs") loadJobs();
 }
 
@@ -634,13 +674,13 @@ function renderLogin() {
       state.session = data.session;
       state.user = data.user;
       setStatus("로그인 완료");
-      go("jobs");
+      go("company");
     } catch (err) {
       setStatus(`로그인 실패: ${err?.message || err}`, "error");
     }
   }}, "로그인");
 
-  const card = el("div", { class: "card" },
+  const card = el("div", { class: "card authCard" },
     el("div", { class: "item-title" }, APP_TITLE),
     el("div", { class: "row" },
       el("div", { class: "col" }, el("div", { class: "label" }, "이메일"), email),
@@ -653,20 +693,193 @@ function renderLogin() {
   root.appendChild(card);
 }
 
-function renderJobs() {
-  showHeader(false, true);
+
+function renderCompanySelect() {
+  showHeader(true, false);
   clearRoot();
 
-  const header = el("div", { class: "card" },
-    el("div", { class: "row space" },
+  const card = el("div", { class: "card authCard" },
+    el("div", { class: "item-title" }, "회사 선택"),
+    el("div", { class: "small", style: "color:var(--muted)" }, "회사 목록은 DB 기준으로 자동 반영돼. (추가 회사 대응)")
+  );
+
+  const list = el("div", { class: "col", style: "gap:12px;margin-top:12px" });
+
+  if (!state.companies.length) {
+    list.appendChild(el("div", { class: "small", style: "color:var(--muted)" },
+      "회사 목록을 불러오지 못했어. (권한/RLS 또는 companies 테이블 확인)\n그래도 수동 입력으로 진행 가능."
+    ));
+    const manual = el("input", { class: "input", type: "text", placeholder: "회사명 입력" });
+    if (state.company) manual.value = state.company;
+    const btnNext = el("button", {
+      class: "btn primary block",
+      type: "button",
+      onclick: () => {
+        state.company = manual.value.trim() || state.company || "";
+        state.companyId = null;
+        saveSettings();
+        go("mode");
+      }
+    }, "다음");
+    list.appendChild(manual);
+    list.appendChild(btnNext);
+  } else {
+    for (const c of state.companies) {
+      const active = state.companyId && String(state.companyId) === String(c.id);
+      const b = el("button", {
+        class: `btn block ${active ? "primary" : ""}`,
+        type: "button",
+        onclick: () => {
+          state.companyId = c.id;
+          state.company = String(c.name || "");
+          saveSettings();
+          render();
+        }
+      }, String(c.name || "(이름없음)"));
+      list.appendChild(b);
+    }
+
+    const btnNext = el("button", {
+      class: "btn primary block",
+      type: "button",
+      onclick: () => go("mode"),
+    }, "다음");
+
+    list.appendChild(btnNext);
+  }
+
+  card.appendChild(list);
+  root.appendChild(card);
+}
+
+function renderModeSelect() {
+  showHeader(true, false);
+  clearRoot();
+
+  const card = el("div", { class: "card authCard" },
+    el("div", { class: "item-title" }, "업무 선택"),
+    el("div", { class: "small", style: "color:var(--muted)" }, "농도/비산 선택 후 현장 목록으로 이동해.")
+  );
+
+  const list = el("div", { class: "col", style: "gap:12px;margin-top:12px" });
+
+  const btnDensity = el("button", {
+    class: `btn block ${state.mode === "density" ? "primary" : ""}`,
+    type: "button",
+    onclick: () => { state.mode = "density"; saveSettings(); render(); }
+  }, "농도");
+
+  const btnScatter = el("button", {
+    class: `btn block ${state.mode === "scatter" ? "primary" : ""}`,
+    type: "button",
+    onclick: () => { state.mode = "scatter"; saveSettings(); render(); }
+  }, "비산");
+
+  const next = el("button", {
+    class: "btn primary block",
+    type: "button",
+    onclick: () => go("jobs"),
+  }, "현장 보기");
+
+  list.appendChild(btnDensity);
+  list.appendChild(btnScatter);
+  list.appendChild(next);
+
+  card.appendChild(list);
+  root.appendChild(card);
+}
+
+
+async function insertJobBestEffort({ name, dateISO }) {
+  await detectDb();
+  await loadCompanies();
+
+  const wantsCompanyId = state.companyId ? String(state.companyId) : null;
+
+  const tries = [
+    { site_name: name, work_date: dateISO || null, company_id: wantsCompanyId || undefined, company: state.company || undefined, mode: state.mode },
+    { name: name, work_date: dateISO || null, company_id: wantsCompanyId || undefined, company: state.company || undefined, mode: state.mode },
+    { project_name: name, work_date: dateISO || null, company_id: wantsCompanyId || undefined, company: state.company || undefined, mode: state.mode },
+    { title: name, work_date: dateISO || null, company_id: wantsCompanyId || undefined, company: state.company || undefined, mode: state.mode },
+    { site_name: name, date: dateISO || null, company_id: wantsCompanyId || undefined, company: state.company || undefined, mode: state.mode },
+    { name: name, date: dateISO || null, company_id: wantsCompanyId || undefined, company: state.company || undefined, mode: state.mode },
+  ];
+
+  let lastErr = null;
+  for (const payload0 of tries) {
+    const payload = { ...payload0 };
+    Object.keys(payload).forEach(k => (payload[k] === null || payload[k] === undefined || payload[k] === "") && delete payload[k]);
+
+    const r = await sbFrom(db.schema, db.jobTable).insert([payload]).select("*").single();
+    if (!r.error) return r.data;
+    lastErr = r.error;
+  }
+  throw lastErr || new Error("현장 생성 실패");
+}
+
+function renderJobCreateCard() {
+  const name = el("input", { class: "input", type: "text", placeholder: "현장명 (필수)" });
+  const date = el("input", { class: "input", type: "date" });
+
+  const btn = el("button", {
+    class: "btn primary block",
+    type: "button",
+    onclick: async () => {
+      const nm = name.value.trim();
+      const dt = date.value || "";
+      if (!nm) return setStatus("현장명 입력해줘.", "error");
+
+      try {
+        setStatus("현장 생성 중...", "busy");
+        const created = await insertJobBestEffort({ name: nm, dateISO: dt });
+        setStatus("현장 생성 완료");
+        state.creatingJob = false;
+
+        await loadJobs();
+        state.job = created;
+        go("samples");
+        await loadSamplesAndPhotos();
+      } catch (e) {
+        setStatus(`현장 생성 실패: ${e?.message || e}`, "error");
+      }
+    }
+  }, "현장 추가");
+
+  return el("div", { class: "card" },
+    el("div", { class: "item-title" }, "새 현장 추가"),
+    el("div", { class: "col", style: "gap:12px" },
+      el("div", { class: "col" }, el("div", { class: "label" }, "현장명"), name),
+      el("div", { class: "col" }, el("div", { class: "label" }, "작업일 (선택)"), date),
+      btn
+    )
+  );
+}
+
+function renderJobs() {
+  showHeader(true, true);
+  clearRoot();
+
+    const header = el("div", { class: "card" },
+    el("div", { class: "row space stack-mobile" },
       el("div", {},
-        el("div", { class: "item-title" }, `현장 (${state.company} / ${modeLabel(state.mode)})`),
+        el("div", { class: "item-title" }, `현장 (${state.company || "회사"} / ${modeLabel(state.mode)})`),
         el("div", { class: "small", style: "color:var(--muted)" }, `테이블: ${db.schema ? db.schema + "." : ""}${db.jobTable}`)
       ),
-      el("div", { class: "badge-new" }, `${state.jobs.length}`)
+      el("div", { class: "row stack-mobile-right" },
+        el("div", { class: "badge-new" }, `${state.jobs.length}`),
+        el("button", {
+          class: "btn small",
+          type: "button",
+          onclick: () => { state.creatingJob = !state.creatingJob; render(); }
+        }, state.creatingJob ? "닫기" : "새 현장")
+      )
     )
   );
   root.appendChild(header);
+
+  if (state.creatingJob) {
+    root.appendChild(renderJobCreateCard());
+  }
 
   if (!state.jobs.length) {
     root.appendChild(el("div", { class: "card" },
@@ -853,6 +1066,8 @@ async function renderSamples() {
 function render() {
   menuHide();
   if (state.view === "login") return renderLogin();
+  if (state.view === "company") return renderCompanySelect();
+  if (state.view === "mode") return renderModeSelect();
   if (state.view === "jobs") return renderJobs();
   if (state.view === "samples") return renderSamples();
 
@@ -873,7 +1088,7 @@ async function boot() {
     state.user = session?.user || null;
 
     if (state.session) {
-      go("jobs");
+      go("company");
     } else {
       go("login");
     }
@@ -881,7 +1096,11 @@ async function boot() {
     supabase.auth.onAuthStateChange((_event, session2) => {
       state.session = session2;
       state.user = session2?.user || null;
-      if (!session2) go("login");
+      if (!session2) {
+        go("login");
+      } else {
+        if (state.view === "login" || state.view === "boot") go("company");
+      }
     });
 
     setStatus("준비되었습니다.");
