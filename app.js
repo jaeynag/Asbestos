@@ -1,13 +1,11 @@
 // app.js (GitHub Pages web uploader)
 // - UI: index.html + styles.css classes are kept
 // - Data: Supabase (Auth + PostgREST)
-// - Heavy files: optional NAS upload (config via localStorage)
+// - Heavy files: NAS 업로드(권장) / Supabase Storage(예비)
 //
-// NAS 설정(콘솔에서 1번만 세팅)
-//   localStorage.setItem('NAS_GATEWAY_URL', 'https://<your-domain>');
-//   localStorage.setItem('NAS_UPLOAD_URL',  'https://<your-domain>/api/upload');   // optional
-//   localStorage.setItem('NAS_FILE_BASE',   'https://<your-domain>/files');        // optional
-//   localStorage.setItem('NAS_DELETE_URL',  'https://<your-domain>/api/delete');  // optional
+// NAS 설정(전사 공통)
+//   - index.html의 window.APP_CONFIG 값을 사용합니다.
+//   - 추가로, 개발/테스트 용도로 localStorage 값이 있으면(localStorage가 더 우선) 이를 사용합니다.
 //
 // NAS 업로드 API(권장 형태)
 //   POST NAS_UPLOAD_URL (multipart/form-data)
@@ -44,11 +42,42 @@ const RPC_CREATE_SAMPLE = "create_sample";
 const RPC_UPSERT_SAMPLE_PHOTO = "upsert_sample_photo";
 const RPC_DELETE_SAMPLE_AND_RENUMBER = "delete_sample_and_renumber";
 
-// NAS (optional)
-const NAS_GATEWAY_URL = (localStorage.getItem("NAS_GATEWAY_URL") || "").trim().replace(/\/$/, "");
-const NAS_UPLOAD_URL = (localStorage.getItem("NAS_UPLOAD_URL") || (NAS_GATEWAY_URL ? `${NAS_GATEWAY_URL}/api/upload` : "")).trim();
-const NAS_FILE_BASE = (localStorage.getItem("NAS_FILE_BASE") || (NAS_GATEWAY_URL ? `${NAS_GATEWAY_URL}/files` : "")).trim().replace(/\/$/, "");
-const NAS_DELETE_URL = (localStorage.getItem("NAS_DELETE_URL") || "").trim();
+// NAS (preferred)
+const APP_CONFIG = (typeof window !== "undefined" && window.APP_CONFIG && typeof window.APP_CONFIG === "object")
+  ? window.APP_CONFIG
+  : {};
+
+function _trim(v) {
+  return String(v ?? "").trim();
+}
+function _normBase(v) {
+  return _trim(v).replace(/\/$/, "");
+}
+function _isGithubIoHost() {
+  try {
+    return /(^|\.)github\.io$/i.test(location.hostname);
+  } catch {
+    return false;
+  }
+}
+
+// 우선순위: localStorage(개발/테스트) > window.APP_CONFIG(배포 설정) > 자동(커스텀 도메인에서는 현재 도메인)
+const LS_GATEWAY = _trim(localStorage.getItem("NAS_GATEWAY_URL"));
+const LS_UPLOAD = _trim(localStorage.getItem("NAS_UPLOAD_URL"));
+const LS_FILE_BASE = _trim(localStorage.getItem("NAS_FILE_BASE"));
+const LS_DELETE = _trim(localStorage.getItem("NAS_DELETE_URL"));
+
+const CFG_GATEWAY = _trim(APP_CONFIG.NAS_GATEWAY_URL);
+const CFG_UPLOAD = _trim(APP_CONFIG.NAS_UPLOAD_URL);
+const CFG_FILE_BASE = _trim(APP_CONFIG.NAS_FILE_BASE);
+const CFG_DELETE = _trim(APP_CONFIG.NAS_DELETE_URL);
+
+const AUTO_GATEWAY = _isGithubIoHost() ? "" : _trim(location.origin);
+
+const NAS_GATEWAY_URL = _normBase(LS_GATEWAY || CFG_GATEWAY || AUTO_GATEWAY);
+const NAS_UPLOAD_URL = _trim(LS_UPLOAD || CFG_UPLOAD || (NAS_GATEWAY_URL ? `${NAS_GATEWAY_URL}/api/upload` : ""));
+const NAS_FILE_BASE = _normBase(LS_FILE_BASE || CFG_FILE_BASE || (NAS_GATEWAY_URL ? `${NAS_GATEWAY_URL}/files` : ""));
+const NAS_DELETE_URL = _trim(LS_DELETE || CFG_DELETE || (NAS_GATEWAY_URL ? `${NAS_GATEWAY_URL}/api/delete` : ""));
 
 /** =========================
  *  Utils
@@ -369,7 +398,7 @@ async function resolvePhotoUrl(storagePath, sample, role) {
   // 2) NAS relative (optional): "nas:..."
   if (typeof storagePath === "string" && storagePath.startsWith("nas:")) {
     const rel = storagePath.slice(4).replace(/^\//, "");
-    if (!NAS_FILE_BASE) throw new Error("NAS_FILE_BASE가 설정되지 않았어");
+    if (!NAS_FILE_BASE) throw new Error("NAS 파일 경로 설정이 되어 있지 않습니다. (NAS_FILE_BASE)");
     return joinUrl(NAS_FILE_BASE, rel);
   }
 
@@ -606,7 +635,7 @@ function nasEnabled() {
 }
 
 async function nasUpload(relPath, file) {
-  if (!NAS_UPLOAD_URL) throw new Error("NAS_UPLOAD_URL이 설정되지 않았어 (localStorage)" );
+  if (!NAS_UPLOAD_URL) throw new Error("NAS 업로드 주소 설정이 되어 있지 않습니다. (NAS_UPLOAD_URL)");
 
   const fd = new FormData();
   fd.append("path", relPath);
@@ -630,18 +659,18 @@ async function nasUpload(relPath, file) {
     // prefer url
     if (js?.url) return { url: String(js.url), path: String(js.path || relPath) };
     if (js?.path) {
-      if (!NAS_FILE_BASE) throw new Error("NAS_FILE_BASE가 설정되지 않았어 (localStorage)" );
+      if (!NAS_FILE_BASE) throw new Error("NAS 파일 경로 설정이 되어 있지 않습니다. (NAS_FILE_BASE)");
       return { url: joinUrl(NAS_FILE_BASE, String(js.path)), path: String(js.path) };
     }
     // unknown JSON
-    if (!NAS_FILE_BASE) throw new Error("NAS_FILE_BASE가 설정되지 않았어 (localStorage)" );
+    if (!NAS_FILE_BASE) throw new Error("NAS 파일 경로 설정이 되어 있지 않습니다. (NAS_FILE_BASE)");
     return { url: joinUrl(NAS_FILE_BASE, relPath), path: relPath };
   }
 
   // non-json: assume it returns URL text
   const url = (await resp.text()).trim();
   if (isHttpUrl(url)) return { url, path: relPath };
-  if (!NAS_FILE_BASE) throw new Error("NAS_FILE_BASE가 설정되지 않았어 (localStorage)" );
+  if (!NAS_FILE_BASE) throw new Error("NAS 파일 경로 설정이 되어 있지 않습니다. (NAS_FILE_BASE)");
   return { url: joinUrl(NAS_FILE_BASE, relPath), path: relPath };
 }
 
@@ -1038,16 +1067,16 @@ function renderAuth() {
 
         const e = normEmail(email.value);
         const p = pw.value || "";
-        if (!e || !p) throw new Error("이메일/비밀번호를 입력해줘");
+        if (!e || !p) throw new Error("이메일과 비밀번호를 입력해 주세요.");
 
         if (state.authTab === "signup") {
           const n = safeText(name.value);
-          if (!n) throw new Error("이름을 입력해줘");
+          if (!n) throw new Error("이름을 입력해 주세요.");
           if (p.length < 6) throw new Error("비밀번호는 6자 이상 권장");
-          if ((pw2.value || "") !== p) throw new Error("비밀번호 확인이 일치하지 않아");
+          if ((pw2.value || "") !== p) throw new Error("비밀번호 확인이 일치하지 않습니다.");
 
           const exists = await emailExists(e);
-          if (exists === true) throw new Error("이미 가입된 이메일이야");
+          if (exists === true) throw new Error("이미 가입된 이메일입니다.");
 
           const { data, error } = await supabase.auth.signUp({
             email: e,
@@ -1065,8 +1094,8 @@ function renderAuth() {
             return;
           }
 
-          state.authMsg = "회원가입 완료. 이메일 인증을 켰다면 메일 확인 후 로그인해줘.";
-          setFoot("회원가입 완료");
+          state.authMsg = "회원가입이 완료되었습니다. 이메일 인증을 사용 중이라면 메일 확인 후 로그인해 주세요.";
+          setFoot("회원가입이 완료되었습니다.");
           render();
           return;
         }
@@ -1098,7 +1127,7 @@ function renderAuth() {
       "div",
       { style: "margin-top:10px; font-size:12px; color:#888;" },
       [
-        el("div", { text: nasEnabled() ? "사진 업로드: NAS" : "사진 업로드: Supabase Storage" }),
+        el("div", { text: nasEnabled() ? "사진 업로드: NAS 서버" : "사진 업로드: 클라우드 저장소" }),
       ]
     ),
   ]);
@@ -1111,14 +1140,13 @@ function renderCompanySelect() {
   const list = el("div", { class: "list" });
 
   if (!state.companies.length) {
-    list.appendChild(el("div", { class: "card", text: "회사 목록이 비어있어." }));
+    list.appendChild(el("div", { class: "card", text: "회사 목록이 비어 있습니다." }));
   } else {
     for (const c of state.companies) {
       list.appendChild(
         el("div", { class: "item" }, [
           el("div", {}, [
             el("div", { class: "item-title", text: c.name }),
-            el("div", { class: "item-sub", text: `회사 ID: ${c.id}` }),
           ]),
           el("button", {
             class: "btn primary",
@@ -1188,7 +1216,7 @@ function renderJobSelect() {
     onclick: async () => {
       try {
         const project_name = safeText(pj.value);
-        if (!project_name) throw new Error("현장명을 입력해줘");
+        if (!project_name) throw new Error("현장명을 입력해 주세요.");
 
         setFoot("현장을 생성 중입니다...");
         const job = await createJob({
@@ -1198,7 +1226,7 @@ function renderJobSelect() {
           address: safeText(addr.value),
           contractor: safeText(cont.value),
         });
-        setFoot("현장 생성 완료");
+        setFoot("현장이 생성되었습니다.");
         await loadJobs();
         state.job = null;
         render();
@@ -1226,7 +1254,7 @@ function renderJobSelect() {
 
   // jobs list
   if (!state.jobs.length) {
-    list.appendChild(el("div", { class: "card", text: "현장이 없어. 위에서 추가해줘." }));
+    list.appendChild(el("div", { class: "card", text: "현장이 없습니다. 위에서 추가해 주세요." }));
   } else {
     for (const j of state.jobs) {
       const sub = [safeText(j.address), safeText(j.contractor)].filter(Boolean).join(" · ");
@@ -1361,7 +1389,7 @@ function renderJobWork() {
   const samples = state.samplesByDate.get(dateISO) || [];
 
   if (!samples.length) {
-    root.appendChild(el("div", { class: "card", text: "이 날짜에 시료가 없어. 위에서 추가해줘." }));
+    root.appendChild(el("div", { class: "card", text: "이 날짜에 시료가 없습니다. 위에서 추가해 주세요." }));
     return;
   }
 
@@ -1373,7 +1401,6 @@ function renderJobWork() {
       el("div", { class: "sampleMeta" }, [
         el("div", { class: "metaLine" }, [
           el("span", { class: "label", text: ymdDots(s.measurement_date) }),
-          el("span", { class: "label", text: `ID: ${s.id.slice(0, 8)}...` }),
         ]),
         el("div", { class: "metaLine" }, [
           el("span", { class: "label", text: "시각" }),
@@ -1387,7 +1414,7 @@ function renderJobWork() {
               try {
                 await updateSampleFields(s.id, { start_time: v });
                 s.start_time = v;
-                setFoot("시각 저장됨");
+                setFoot("시각이 저장되었습니다.");
               } catch (e) {
                 console.error(e);
                 setFoot(`저장 실패: ${e?.message || e}`);
