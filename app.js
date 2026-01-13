@@ -941,7 +941,10 @@ async function loadJob(job) {
     s._photoState = {};
     s._photoPath = {};
     s._thumbUrl = {};
-    state.samplesByDate.get(s.measurement_date)!.push(s);
+    // JS에서 TypeScript의 non-null assertion(!) 문법은 파싱 에러를 내므로 안전하게 처리
+    const bucket = state.samplesByDate.get(s.measurement_date);
+    if (bucket) bucket.push(s);
+    else state.samplesByDate.set(s.measurement_date, [s]);
   }
 
   const photos = await fetchPhotosForSamples(samples.map((s) => s.id));
