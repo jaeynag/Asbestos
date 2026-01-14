@@ -75,9 +75,9 @@ const CFG_DELETE = _trim(APP_CONFIG.NAS_DELETE_URL);
 const AUTO_GATEWAY = _isGithubIoHost() ? "" : _trim(location.origin);
 
 const NAS_GATEWAY_URL = _normBase(LS_GATEWAY || CFG_GATEWAY || AUTO_GATEWAY);
-const NAS_UPLOAD_URL = _trim(LS_UPLOAD || CFG_UPLOAD || (NAS_GATEWAY_URL ? `${NAS_GATEWAY_URL}/api/upload` : ""));
-const NAS_FILE_BASE = _normBase(LS_FILE_BASE || CFG_FILE_BASE || (NAS_GATEWAY_URL ? `${NAS_GATEWAY_URL}/files` : ""));
-const NAS_DELETE_URL = _trim(LS_DELETE || CFG_DELETE || (NAS_GATEWAY_URL ? `${NAS_GATEWAY_URL}/api/delete` : ""));
+const NAS_UPLOAD_URL = _trim(LS_UPLOAD || CFG_UPLOAD || (NAS_GATEWAY_URL ? `${NAS_GATEWAY_URL}/upload` : ""));
+const NAS_FILE_BASE = _normBase(LS_FILE_BASE || CFG_FILE_BASE || (NAS_GATEWAY_URL ? `${NAS_GATEWAY_URL}/public` : ""));
+const NAS_DELETE_URL = _trim(LS_DELETE || CFG_DELETE || "");
 
 /** =========================
  *  Utils
@@ -634,53 +634,73 @@ function nasEnabled() {
   return !!NAS_UPLOAD_URL;
 }
 
-async function nasUpload(relPath, file) {
+async function nasUpload(meta, file) {
+  // NAS Upload Gateway (FastAPI)
+  // POST /upload (multipart/form-data)
+  // fields: file, company_uuid, mode, job_uuid, measurement_date, sample_uuid, kind
   if (!NAS_UPLOAD_URL) throw new Error("NAS 업로드 주소 설정이 되어 있지 않습니다. (NAS_UPLOAD_URL)");
+  if (!NAS_FILE_BASE) throw new Error("NAS 파일 경로 설정이 되어 있지 않습니다. (NAS_FILE_BASE)");
+
+  const company_uuid = meta?.company_uuid;
+  const mode = meta?.mode;
+  const job_uuid = meta?.job_uuid;
+  const measurement_date = meta?.measurement_date; // YYYY-MM-DD
+  const sample_uuid = meta?.sample_uuid;
+  const kind = meta?.kind; // measurement|start|end
+
+  if (!company_uuid || !mode || !job_uuid || !measurement_date || !sample_uuid || !kind) {
+    throw new Error("NAS 업로드 메타데이터가 부족합니다.");
+  }
 
   const fd = new FormData();
-  fd.append("path", relPath);
-  fd.append("file", file, file.name || "upload.jpg");
+  fd.append("file", file, file?.name || "upload.jpg");
+  fd.append("company_uuid", company_uuid);
+  fd.append("mode", mode);
+  fd.append("job_uuid", job_uuid);
+  fd.append("measurement_date", measurement_date);
+  fd.append("sample_uuid", sample_uuid);
+  fd.append("kind", kind);
 
-  const resp = await fetch(NAS_UPLOAD_URL, {
-    method: "POST",
-    body: fd,
-    // credentials: "include", // 필요하면 NAS 쪽 인증 방식에 맞춰 사용
-  });
-
-  if (!resp.ok) {
-    const t = await resp.text().catch(() => "");
-    throw new Error(`NAS 업로드 실패 (${resp.status}): ${t.slice(0, 200)}`);
-  }
+  const resp = await fetch(NAS_UPLOAD_URL, { method: "POST", body: fd });
 
   const ct = resp.headers.get("content-type") || "";
+  const raw = await resp.text().catch(() => "");
+  let js = null;
   if (ct.includes("application/json")) {
-    const js = await resp.json();
-    if (js?.ok === false) throw new Error(js?.message || "NAS 업로드 응답 ok=false");
-    // prefer url
-    if (js?.url) return { url: String(js.url), path: String(js.path || relPath) };
-    if (js?.path) {
-      if (!NAS_FILE_BASE) throw new Error("NAS 파일 경로 설정이 되어 있지 않습니다. (NAS_FILE_BASE)");
-      return { url: joinUrl(NAS_FILE_BASE, String(js.path)), path: String(js.path) };
-    }
-    // unknown JSON
-    if (!NAS_FILE_BASE) throw new Error("NAS 파일 경로 설정이 되어 있지 않습니다. (NAS_FILE_BASE)");
-    return { url: joinUrl(NAS_FILE_BASE, relPath), path: relPath };
+    try { js = JSON.parse(raw || "{}"); } catch { js = null; }
   }
 
-  // non-json: assume it returns URL text
-  const url = (await resp.text()).trim();
-  if (isHttpUrl(url)) return { url, path: relPath };
-  if (!NAS_FILE_BASE) throw new Error("NAS 파일 경로 설정이 되어 있지 않습니다. (NAS_FILE_BASE)");
-  return { url: joinUrl(NAS_FILE_BASE, relPath), path: relPath };
+  if (!resp.ok) {
+    const msg = js?.detail || js?.message || raw || "";
+    throw new Error(`NAS 업로드 실패 (${resp.status}): ${String(msg).slice(0, 400)}`);
+  }
+
+  // 예상 응답 키: rel_path (우선), path/key 등도 허용
+  const relPath =
+    js?.rel_path ||
+    js?.relPath ||
+    js?.path ||
+    js?.key ||
+    "";
+
+  if (!relPath) {
+    throw new Error("NAS 업로드 응답에 rel_path가 없습니다.");
+  }
+
+  // URL은 있으면 쓰고, 없으면 public base로 조합
+  const url = isHttpUrl(js?.url) ? String(js.url) : joinUrl(NAS_FILE_BASE, String(relPath).replace(/^\//, ""));
+  return { rel_path: String(relPath).replace(/^\//, ""), url };
 }
 
 async function nasDeleteByPathOrUrl(storagePath) {
+(storagePath) {
   if (!NAS_DELETE_URL) return;
   if (!storagePath) return;
 
   // send either url or path
   const fd = new FormData();
-  fd.append("target", storagePath);
+  const target = String(storagePath || "").startsWith("nas:") ? String(storagePath).slice(4) : storagePath;
+  fd.append("target", target);
 
   try {
     await fetch(NAS_DELETE_URL, { method: "POST", body: fd });
@@ -759,8 +779,15 @@ async function uploadAndBindPhoto(sample, role, file) {
 
     if (nasEnabled()) {
       // NAS upload -> store URL in DB
-      const out = await nasUpload(relPath, file);
-      storedPath = out.url; // store URL so web can render w/o signed url
+      const out = await nasUpload({
+        company_uuid: companyId,
+        mode,
+        job_uuid: jobId,
+        measurement_date: iso10(sample.measurement_date),
+        sample_uuid: sample.id,
+        kind: role,
+      }, file);
+      storedPath = `nas:${out.rel_path}`;
     } else {
       // Supabase Storage upload
       const { error: upErr } = await supabase.storage.from(BUCKET).upload(relPath, file, {
@@ -851,7 +878,7 @@ async function deleteSample(sample) {
       // fallback: delete photo rows, sample row, then renumber
       const photos = await fetchPhotosForSamples([sample.id]);
       for (const p of photos) {
-        if (isHttpUrl(p.storage_path)) await nasDeleteByPathOrUrl(p.storage_path);
+        if (isHttpUrl(p.storage_path) || String(p.storage_path || "").startsWith("nas:")) await nasDeleteByPathOrUrl(p.storage_path);
         // Supabase Storage remove best-effort (only if relative path)
         if (p.storage_path && !isHttpUrl(p.storage_path) && !String(p.storage_path).startsWith("nas:")) {
           await supabase.storage.from(BUCKET).remove([p.storage_path]).catch(() => null);
@@ -889,7 +916,7 @@ async function deleteJobAndRelated(job) {
       // NAS delete best-effort
       for (const p of photos) {
         if (!p.storage_path) continue;
-        if (isHttpUrl(p.storage_path)) await nasDeleteByPathOrUrl(p.storage_path);
+        if (isHttpUrl(p.storage_path) || String(p.storage_path || "").startsWith("nas:")) await nasDeleteByPathOrUrl(p.storage_path);
       }
 
       // Supabase Storage remove best-effort
