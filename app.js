@@ -66,42 +66,38 @@ const LS_GATEWAY = _trim(localStorage.getItem("NAS_GATEWAY_URL"));
 const LS_UPLOAD = _trim(localStorage.getItem("NAS_UPLOAD_URL"));
 const LS_FILE_BASE = _trim(localStorage.getItem("NAS_FILE_BASE"));
 const LS_DELETE = _trim(localStorage.getItem("NAS_DELETE_URL"));
+const LS_AUTH = _trim(localStorage.getItem("NAS_AUTH_TOKEN"));
 
 const CFG_GATEWAY = _trim(APP_CONFIG.NAS_GATEWAY_URL);
 const CFG_UPLOAD = _trim(APP_CONFIG.NAS_UPLOAD_URL);
 const CFG_FILE_BASE = _trim(APP_CONFIG.NAS_FILE_BASE);
 const CFG_DELETE = _trim(APP_CONFIG.NAS_DELETE_URL);
+const CFG_AUTH = _trim(APP_CONFIG.NAS_AUTH_TOKEN);
 
 const AUTO_GATEWAY = _isGithubIoHost() ? "" : _trim(location.origin);
 
 const NAS_GATEWAY_URL = _normBase(LS_GATEWAY || CFG_GATEWAY || AUTO_GATEWAY);
 const NAS_UPLOAD_URL = _trim(LS_UPLOAD || CFG_UPLOAD || (NAS_GATEWAY_URL ? `${NAS_GATEWAY_URL}/upload` : ""));
 const NAS_FILE_BASE = _normBase(LS_FILE_BASE || CFG_FILE_BASE || (NAS_GATEWAY_URL ? `${NAS_GATEWAY_URL}/public` : ""));
-const NAS_DELETE_URL = _trim(LS_DELETE || CFG_DELETE || "");async function _getNasAuthorization() {
-  // 1) Optional static token from config (not recommended for public deployments)
-  const cfg = (window && window.APP_CONFIG) ? window.APP_CONFIG : {};
-  let tok = (cfg && (cfg.NAS_AUTH_TOKEN || cfg.NAS_AUTH || cfg.NAS_TOKEN)) ? String(cfg.NAS_AUTH_TOKEN || cfg.NAS_AUTH || cfg.NAS_TOKEN) : "";
-  tok = tok.trim();
-  if (tok) {
-    if (!/^(Bearer|Basic)\s+/i.test(tok)) tok = `Bearer ${tok}`;
-    return tok;
-  }
+const NAS_DELETE_URL = _trim(LS_DELETE || CFG_DELETE || "");
 
-  // 2) Supabase session access token (recommended)
+
+async function getNasAuthorization() {
+  // 우선순위: localStorage > APP_CONFIG > Supabase 세션(access_token)
+  const raw = _trim(LS_AUTH || CFG_AUTH);
+  if (raw) {
+    if (/^(Bearer|Basic)\s+/i.test(raw)) return raw;
+    return `Bearer ${raw}`;
+  }
   try {
-    if (typeof sb !== "undefined" && sb?.auth?.getSession) {
-      const { data } = await sb.auth.getSession();
-      const at = data?.session?.access_token;
-      if (at) return `Bearer ${at}`;
-    }
+    const { data } = await supabase.auth.getSession();
+    const token = data?.session?.access_token;
+    if (token) return `Bearer ${token}`;
   } catch {
     // ignore
   }
-
   return "";
 }
-
-
 
 /** =========================
  *  Utils
@@ -716,9 +712,8 @@ async function nasUpload(meta, file) {
   // optional
   if (meta?.mode) fd.append("mode", String(meta.mode));
 
-    const _auth = await _getNasAuthorization();
-  const _headers = _auth ? { Authorization: _auth } : {};
-  const resp = await fetch(NAS_UPLOAD_URL, { method: "POST", headers: _headers, body: fd });
+  const auth = await getNasAuthorization();
+  const resp = await fetch(NAS_UPLOAD_URL, { method: "POST", headers: auth ? { Authorization: auth } : undefined, body: fd });
 
   const ct = resp.headers.get("content-type") || "";
   let js = null;
@@ -768,9 +763,8 @@ async function nasDeleteByPathOrUrl(storagePath) {
   fd.append("target", target);
 
   try {
-        const _auth = await _getNasAuthorization();
-    const _headers = _auth ? { Authorization: _auth } : {};
-    await fetch(NAS_DELETE_URL, { method: "POST", headers: _headers, body: fd });
+    const auth = await getNasAuthorization();
+    await fetch(NAS_DELETE_URL, { method: "POST", headers: auth ? { Authorization: auth } : undefined, body: fd });
   } catch {
     // ignore
   }
