@@ -77,7 +77,31 @@ const AUTO_GATEWAY = _isGithubIoHost() ? "" : _trim(location.origin);
 const NAS_GATEWAY_URL = _normBase(LS_GATEWAY || CFG_GATEWAY || AUTO_GATEWAY);
 const NAS_UPLOAD_URL = _trim(LS_UPLOAD || CFG_UPLOAD || (NAS_GATEWAY_URL ? `${NAS_GATEWAY_URL}/upload` : ""));
 const NAS_FILE_BASE = _normBase(LS_FILE_BASE || CFG_FILE_BASE || (NAS_GATEWAY_URL ? `${NAS_GATEWAY_URL}/public` : ""));
-const NAS_DELETE_URL = _trim(LS_DELETE || CFG_DELETE || "");
+const NAS_DELETE_URL = _trim(LS_DELETE || CFG_DELETE || "");async function _getNasAuthorization() {
+  // 1) Optional static token from config (not recommended for public deployments)
+  const cfg = (window && window.APP_CONFIG) ? window.APP_CONFIG : {};
+  let tok = (cfg && (cfg.NAS_AUTH_TOKEN || cfg.NAS_AUTH || cfg.NAS_TOKEN)) ? String(cfg.NAS_AUTH_TOKEN || cfg.NAS_AUTH || cfg.NAS_TOKEN) : "";
+  tok = tok.trim();
+  if (tok) {
+    if (!/^(Bearer|Basic)\s+/i.test(tok)) tok = `Bearer ${tok}`;
+    return tok;
+  }
+
+  // 2) Supabase session access token (recommended)
+  try {
+    if (typeof sb !== "undefined" && sb?.auth?.getSession) {
+      const { data } = await sb.auth.getSession();
+      const at = data?.session?.access_token;
+      if (at) return `Bearer ${at}`;
+    }
+  } catch {
+    // ignore
+  }
+
+  return "";
+}
+
+
 
 /** =========================
  *  Utils
@@ -692,7 +716,9 @@ async function nasUpload(meta, file) {
   // optional
   if (meta?.mode) fd.append("mode", String(meta.mode));
 
-  const resp = await fetch(NAS_UPLOAD_URL, { method: "POST", body: fd });
+    const _auth = await _getNasAuthorization();
+  const _headers = _auth ? { Authorization: _auth } : {};
+  const resp = await fetch(NAS_UPLOAD_URL, { method: "POST", headers: _headers, body: fd });
 
   const ct = resp.headers.get("content-type") || "";
   let js = null;
@@ -742,7 +768,9 @@ async function nasDeleteByPathOrUrl(storagePath) {
   fd.append("target", target);
 
   try {
-    await fetch(NAS_DELETE_URL, { method: "POST", body: fd });
+        const _auth = await _getNasAuthorization();
+    const _headers = _auth ? { Authorization: _auth } : {};
+    await fetch(NAS_DELETE_URL, { method: "POST", headers: _headers, body: fd });
   } catch {
     // ignore
   }
