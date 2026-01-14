@@ -65,14 +65,39 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
 .label{ font-size:12px; color:var(--muted); }
 
 .input, select{
-  width:90%; padding:10px 10px; border:1px solid var(--line); border-radius:10px;
-  font-size:14px; background:#fff;
+  width:100%;
+  padding:12px 12px;
+  border:1px solid var(--line);
+  border-radius:12px;
+  font-size:15px;
+  background:#fff;
 }
-
 .btn{
   border:1px solid var(--line); background:#fff; color:#111;
   padding:10px 12px; border-radius:10px; font-size:14px; cursor:pointer;
 }
+
+
+/* date controls (mobile) */
+.dateRow{
+  display:flex;
+  gap:8px;
+  align-items:center;
+  flex-wrap:wrap;
+  margin:10px 0;
+}
+.dateControls{
+  display:flex;
+  gap:8px;
+  align-items:center;
+}
+.dateControls .dateInput{
+  width:150px;
+  padding:8px 10px;
+  font-size:13px;
+  border-radius:10px;
+}
+
 .btn.primary{ background:var(--pri); color:var(--priText); border-color:var(--pri); }
 .btn.ghost{ background:transparent; }
 .btn.small{ padding:7px 8px; font-size:13px; }
@@ -422,4 +447,19 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   border-color: var(--danger);
   color: var(--danger);
   background:#fff;
+}
+
+/* ===== 모바일에서 로그인/선택 화면 여백 ===== */
+.authCard{
+  max-width: 520px;
+  margin: 14px auto;
+  padding: 18px;
+}
+.gap-md{ gap:12px; }
+.btn.block{ width:100%; }
+
+/* 현장 헤더 줄: 모바일에서 오른쪽 버튼/뱃지 줄바꿈 */
+@media (max-width: 520px){
+  .row.stack-mobile{ flex-direction:column; align-items:stretch; }
+  .row.stack-mobile-right{ width:100%; justify-content:space-between; }
 }
