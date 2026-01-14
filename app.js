@@ -693,7 +693,6 @@ async function nasUpload(meta, file) {
 }
 
 async function nasDeleteByPathOrUrl(storagePath) {
-(storagePath) {
   if (!NAS_DELETE_URL) return;
   if (!storagePath) return;
 
