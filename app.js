@@ -1087,6 +1087,7 @@ async function loadJobs() {
 }
 
 async function loadJob(job) {
+  const keepActiveDate = state.activeDate;
   state.job = job;
   state.samplesByDate = new Map();
   state.dates = [];
@@ -1100,7 +1101,7 @@ async function loadJob(job) {
 
   const dates = Array.from(new Set(samples.map((s) => s.measurement_date))).sort();
   state.dates = dates;
-  state.activeDate = dates[0] || new Date().toISOString().slice(0, 10);
+  state.activeDate = (keepActiveDate && dates.includes(keepActiveDate)) ? keepActiveDate : (dates[0] || new Date().toISOString().slice(0, 10));
 
   for (const d of dates) state.samplesByDate.set(d, []);
   for (const s of samples) {
@@ -1428,7 +1429,7 @@ function renderJobWork() {
   const job = state.job;
 
   // date tabs
-  const tabs = el("div", { class: "tabs", style: "margin:10px 0;" });
+  const tabs = el("div", { class: "tabs" });
   for (const d of state.dates) {
     tabs.appendChild(
       el("button", {
@@ -1443,9 +1444,9 @@ function renderJobWork() {
     );
   }
 
-  const dateAdd = el("input", { class: "input", type: "date", value: iso10(state.activeDate) });
+  const dateAdd = el("input", { class: "input dateInput", type: "date", value: iso10(state.activeDate) });
   const dateAddBtn = el("button", {
-    class: "btn",
+    class: "btn small",
     text: "날짜 추가/이동",
     onclick: () => {
       const v = iso10(dateAdd.value);
@@ -1458,6 +1459,12 @@ function renderJobWork() {
       render();
     },
   });
+
+
+  const dateRow = el("div", { class: "dateRow" }, [
+    el("div", { style: "flex:1; min-width:220px;" }, [tabs]),
+    el("div", { class: "dateControls" }, [dateAdd, dateAddBtn]),
+  ]);
 
   // add sample
   const SCATTER_LOCATIONS = [
@@ -1532,12 +1539,8 @@ function renderJobWork() {
         el("div", { class: "item-title", text: safeText(job.project_name, "(현장)") }),
         el("div", { class: "item-sub", text: [modeLabel(state.mode), safeText(job.address)].filter(Boolean).join(" · ") }),
       ]),
-      el("div", { class: "row", style: "gap:8px;" }, [
-        dateAdd,
-        dateAddBtn,
-      ]),
     ]),
-    tabs,
+    dateRow,
     el("div", { class: "row", style: "margin-top:10px;" }, [
       el("div", { class: "col", style: "flex:1; min-width:240px;" }, [
         el("div", { class: "label", text: `시료 추가 · ${ymdDots(state.activeDate)}` }),
