@@ -80,8 +80,6 @@ const NAS_GATEWAY_URL = _normBase(LS_GATEWAY || CFG_GATEWAY || AUTO_GATEWAY);
 const NAS_UPLOAD_URL = _trim(LS_UPLOAD || CFG_UPLOAD || (NAS_GATEWAY_URL ? `${NAS_GATEWAY_URL}/upload` : ""));
 const NAS_FILE_BASE = _normBase(LS_FILE_BASE || CFG_FILE_BASE || (NAS_GATEWAY_URL ? `${NAS_GATEWAY_URL}/public` : ""));
 const NAS_DELETE_URL = _trim(LS_DELETE || CFG_DELETE || "");
-const NAS_SIGN_URL = _trim((LS_GATEWAY || CFG_GATEWAY || AUTO_GATEWAY) ? `${_normBase(LS_GATEWAY || CFG_GATEWAY || AUTO_GATEWAY)}/sign` : "");
-
 
 
 async function getNasAuthorization() {
@@ -99,65 +97,6 @@ async function getNasAuthorization() {
     // ignore
   }
   return "";
-}
-
-
-// NAS signed URL cache (rel_path -> {url, exp})
-const _nasSignedCache = new Map();
-
-function _normalizeRelPath(rel) {
-  let s = String(rel || "").trim();
-  s = s.replace(/^\/+/, "");
-  // 게이트웨이가 'public/..' 형태로 돌려주는 경우 방어
-  s = s.replace(/^public\//, "");
-  s = s.replace(/^\/public\//, "");
-  return s;
-}
-
-async function nasGetSignedUrl(relPath) {
-  const rel = _normalizeRelPath(relPath);
-  if (!rel) return "";
-
-  // 캐시(기본 5분) - 서버 응답에 expires_in 등이 있으면 그걸로 갱신
-  const hit = _nasSignedCache.get(rel);
-  const now = Date.now();
-  if (hit && hit.exp > now + 10_000) return hit.url;
-
-  if (!NAS_SIGN_URL) return "";
-
-  const auth = await getNasAuthorization();
-  if (!auth) return ""; // 인증이 필요한 서버면 헤더 없으면 못 받음
-
-  // FastAPI 구현마다 body 키가 다를 수 있어서 최대한 넓게 보냄
-  const body = { rel_path: rel, relPath: rel, path: rel, target: rel };
-
-  let res;
-  try {
-    res = await fetch(NAS_SIGN_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: auth },
-      body: JSON.stringify(body),
-    });
-  } catch {
-    return "";
-  }
-
-  if (!res.ok) return "";
-
-  let js = null;
-  try {
-    js = await res.json();
-  } catch {
-    return "";
-  }
-
-  const url = js?.url || js?.signed_url || js?.signedUrl || js?.href || "";
-  if (!url) return "";
-
-  // TTL 힌트가 없으면 5분 캐시
-  const ttlSec = Number(js?.expires_in || js?.expiresIn || js?.ttl || 300);
-  _nasSignedCache.set(rel, { url, exp: now + Math.max(30, ttlSec) * 1000 });
-  return url;
 }
 
 /** =========================
@@ -831,6 +770,28 @@ async function nasDeleteByPathOrUrl(storagePath) {
   }
 }
 
+
+/**
+ * NAS 인증 필요 환경에서도 썸네일을 보이게 하기 위해,
+ * Authorization 헤더를 붙여 바이너리를 받아 blob URL로 변환합니다.
+ * (img 태그는 헤더를 붙일 수 없기 때문에 필요)
+ */
+async function nasFetchBlobUrl(relPath) {
+  if (!NAS_GATEWAY_URL) throw new Error("NAS_GATEWAY_URL이 설정되지 않았습니다.");
+  const rel = String(relPath || "").replace(/^\/+/, "");
+  const enc = rel.split("/").map(encodeURIComponent).join("/");
+  const url = joinUrl(NAS_GATEWAY_URL, `object/authenticated/${enc}`);
+
+  const auth = await getNasAuthorization();
+  const resp = await fetch(url, { method: "GET", headers: auth ? { Authorization: auth } : undefined });
+  if (!resp.ok) {
+    const msg = await resp.text().catch(() => "");
+    throw new Error(`NAS 파일 조회 실패 (${resp.status}): ${msg || "요청이 거부되었습니다."}`);
+  }
+  const blob = await resp.blob();
+  return URL.createObjectURL(blob);
+}
+
 /** =========================
  *  Thumbnails
  *  ========================= */
@@ -852,10 +813,37 @@ function ensureThumbUrl(sample, role) {
   // nas: 접두
   if (typeof path === "string" && path.startsWith("nas:")) {
     const rel = path.slice(4).replace(/^\//, "");
-    if (NAS_FILE_BASE) {
-      sample._thumbUrl[role] = joinUrl(NAS_FILE_BASE, rel);
-      sample._thumbExp[role] = Date.now() + 365 * 24 * 3600 * 1000;
-    }
+
+    const now = Date.now();
+    const exp = sample._thumbExp[role] || 0;
+    if (sample._thumbUrl[role] && exp > now + 15_000) return;
+
+    if (sample._thumbLoading[role]) return;
+    sample._thumbLoading[role] = true;
+
+    (async () => {
+      try {
+        // 1) public URL로 먼저 세팅 (NAS가 public 허용이면 이걸로 끝)
+        if (NAS_FILE_BASE) {
+          sample._thumbUrl[role] = joinUrl(NAS_FILE_BASE, rel);
+          sample._thumbExp[role] = Date.now() + 365 * 24 * 3600 * 1000;
+        }
+
+        // 2) public이 막혀있으면 img는 깨짐 → Authorization으로 blob URL 생성해서 교체
+        const auth = await getNasAuthorization();
+        if (auth) {
+          const blobUrl = await nasFetchBlobUrl(rel);
+          sample._thumbUrl[role] = blobUrl;
+          sample._thumbExp[role] = Date.now() + 365 * 24 * 3600 * 1000;
+        }
+      } catch (e) {
+        console.warn("NAS 썸네일 생성 실패:", e);
+      } finally {
+        sample._thumbLoading[role] = false;
+        render();
+      }
+    })();
+
     return;
   }
 
@@ -1589,21 +1577,6 @@ function renderJobWork() {
             src: url,
             alt: roleLabel(role),
             onclick: () => openViewerAt(dateISO, s.id, role),
-            onerror: async (ev) => {
-              const img = ev.target;
-              if (!img || img.dataset.nasTried) return;
-              img.dataset.nasTried = "1";
-              try {
-                const p = s._photoPath?.[role];
-                if (typeof p === "string" && p.startsWith("nas:")) {
-                  const rel = _normalizeRelPath(p.slice(4));
-                  const signed = await nasGetSignedUrl(rel);
-                  if (signed) img.src = signed;
-                }
-              } catch {
-                // ignore
-              }
-            },
           })
         );
       } else {
