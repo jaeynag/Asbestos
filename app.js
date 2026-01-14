@@ -97,6 +97,31 @@ function iso10(dateStrOrDate) {
   return s.includes("T") ? s.split("T", 1)[0] : s.slice(0, 10);
 }
 
+
+function normalizeISODate(v) {
+  // NAS Gateway는 Pydantic date라서 YYYY-MM-DD 형태가 필요함
+  if (!v) return "";
+  let s = iso10(v);
+  if (/^\d{4}\.\d{2}\.\d{2}$/.test(s)) s = s.replace(/\./g, "-");
+  if (/^\d{4}\/\d{2}\/\d{2}$/.test(s)) s = s.replace(/\//g, "-");
+  // 'YYYY-MM-DD' 길이 보정
+  return s.slice(0, 10);
+}
+
+function formatFastApiDetail(detail) {
+  if (Array.isArray(detail)) {
+    return detail
+      .map((d) => {
+        const loc = Array.isArray(d?.loc) ? d.loc.join(".") : (d?.loc || "");
+        const msg = d?.msg || d?.message || "";
+        return (loc ? `${loc}: ` : "") + (msg || JSON.stringify(d));
+      })
+      .join(" | ");
+  }
+  if (detail && typeof detail === "object") return JSON.stringify(detail);
+  return String(detail || "");
+}
+
 function setFoot(msg) {
   const el = document.getElementById("footStatus");
   if (el) el.textContent = msg;
@@ -671,7 +696,7 @@ async function nasUpload(meta, file) {
   }
 
   if (!resp.ok) {
-    const msg = js?.detail || js?.message || raw || "";
+    const msg = formatFastApiDetail(js?.detail || js?.message) || raw || "";
     throw new Error(`NAS 업로드 실패 (${resp.status}): ${String(msg).slice(0, 400)}`);
   }
 
@@ -782,7 +807,7 @@ async function uploadAndBindPhoto(sample, role, file) {
         company_uuid: companyId,
         mode,
         job_uuid: jobId,
-        measurement_date: iso10(sample.measurement_date),
+        measurement_date: normalizeISODate(sample.measurement_date),
         sample_uuid: sample.id,
         kind: role,
       }, file);
