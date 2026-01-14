@@ -1460,8 +1460,40 @@ function renderJobWork() {
   });
 
   // add sample
-  const locInput = el("input", { class: "input", placeholder: "시료 위치(예: 거실, 주방...)" });
-  locInput.value = state.addLoc || "";
+  const SCATTER_LOCATIONS = [
+    "부지경계선",
+    "작업장주변 실내",
+    "작업장주변 실외",
+    "위생설비",
+    "음압기배출구",
+    "폐기물반출구",
+    "폐기물 보관지점",
+  ];
+
+  let locInput;
+  if (state.mode === "scatter") {
+    const sel = el("select", {
+      class: "input",
+      onchange: (ev) => {
+        state.addLoc = ev.target.value;
+      },
+    });
+    for (const name of SCATTER_LOCATIONS) {
+      sel.appendChild(el("option", { value: name, text: name }));
+    }
+    sel.value = state.addLoc && SCATTER_LOCATIONS.includes(state.addLoc) ? state.addLoc : SCATTER_LOCATIONS[0];
+    locInput = sel;
+  } else {
+    const inp = el("input", {
+      class: "input",
+      placeholder: "시료 위치(예: 거실, 주방...)",
+      oninput: (ev) => {
+        state.addLoc = ev.target.value;
+      },
+    });
+    inp.value = state.addLoc || "";
+    locInput = inp;
+  }
   const timeInput = el("input", { class: "timeInput", placeholder: "시각(선택)", value: state.addTime || "" });
 
   const addSampleBtn = el("button", {
