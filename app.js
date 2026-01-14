@@ -660,62 +660,77 @@ function nasEnabled() {
 }
 
 async function nasUpload(meta, file) {
-  // NAS Upload Gateway (FastAPI)
+  // NAS Upload Gateway
   // POST /upload (multipart/form-data)
-  // fields: file, company_uuid, mode, job_uuid, measurement_date, sample_uuid, kind
+  // required fields (per API validation): file, company_id, job_id, date_folder, sample_id, role
   if (!NAS_UPLOAD_URL) throw new Error("NAS 업로드 주소 설정이 되어 있지 않습니다. (NAS_UPLOAD_URL)");
   if (!NAS_FILE_BASE) throw new Error("NAS 파일 경로 설정이 되어 있지 않습니다. (NAS_FILE_BASE)");
 
-  const company_uuid = meta?.company_uuid;
-  const mode = meta?.mode;
-  const job_uuid = meta?.job_uuid;
-  const measurement_date = meta?.measurement_date; // YYYY-MM-DD
-  const sample_uuid = meta?.sample_uuid;
-  const kind = meta?.kind; // measurement|start|end
+  const company_id = meta?.company_id || meta?.company_uuid || meta?.companyId || meta?.company;
+  const job_id = meta?.job_id || meta?.job_uuid || meta?.jobId || meta?.job;
+  const sample_id = meta?.sample_id || meta?.sample_uuid || meta?.sampleId || meta?.sample;
+  const role = meta?.role || meta?.kind; // measurement|start|end
 
-  if (!company_uuid || !mode || !job_uuid || !measurement_date || !sample_uuid || !kind) {
-    throw new Error("NAS 업로드 메타데이터가 부족합니다.");
+  // date_folder: usually "YYYY.MM.DD" (folder name), but accept "YYYY-MM-DD" and normalize
+  const rawDate = meta?.date_folder || meta?.measurement_date || meta?.date || "";
+  let date_folder = String(rawDate || "");
+  if (date_folder.includes("T")) date_folder = date_folder.split("T", 1)[0];
+  if (/^\d{4}-\d{2}-\d{2}$/.test(date_folder)) date_folder = date_folder.replace(/-/g, ".");
+  // keep as-is if already YYYY.MM.DD
+  if (!company_id || !job_id || !sample_id || !role || !date_folder) {
+    throw new Error("NAS 업로드 메타데이터가 부족합니다. (company_id, job_id, date_folder, sample_id, role)");
   }
 
   const fd = new FormData();
   fd.append("file", file, file?.name || "upload.jpg");
-  fd.append("company_uuid", company_uuid);
-  fd.append("mode", mode);
-  fd.append("job_uuid", job_uuid);
-  fd.append("measurement_date", measurement_date);
-  fd.append("sample_uuid", sample_uuid);
-  fd.append("kind", kind);
+  fd.append("company_id", String(company_id));
+  fd.append("job_id", String(job_id));
+  fd.append("date_folder", String(date_folder));
+  fd.append("sample_id", String(sample_id));
+  fd.append("role", String(role));
+
+  // optional
+  if (meta?.mode) fd.append("mode", String(meta.mode));
 
   const resp = await fetch(NAS_UPLOAD_URL, { method: "POST", body: fd });
 
   const ct = resp.headers.get("content-type") || "";
-  const raw = await resp.text().catch(() => "");
   let js = null;
-  if (ct.includes("application/json")) {
-    try { js = JSON.parse(raw || "{}"); } catch { js = null; }
+  let raw = "";
+  try {
+    if (ct.includes("application/json")) {
+      js = await resp.json();
+    } else {
+      raw = await resp.text();
+      try { js = JSON.parse(raw); } catch {}
+    }
+  } catch (e) {
+    // ignore parse error; handle below
   }
 
   if (!resp.ok) {
-    const msg = formatFastApiDetail(js?.detail || js?.message) || raw || "";
-    throw new Error(`NAS 업로드 실패 (${resp.status}): ${String(msg).slice(0, 400)}`);
+    // FastAPI validation errors: {detail:[{loc:[...], msg:"...", type:"..."}]}
+    const detail = js?.detail;
+    if (Array.isArray(detail)) {
+      const parts = detail.map(d => {
+        const loc = Array.isArray(d?.loc) ? d.loc.join(".") : "body";
+        const msg = d?.msg || JSON.stringify(d);
+        return `${loc}: ${msg}`;
+      });
+      throw new Error(`NAS 업로드 실패 (${resp.status}): ${parts.join(" | ")}`);
+    }
+    const msg = (typeof js === "object" && js) ? (js.detail || js.message || JSON.stringify(js)) : (raw || "");
+    throw new Error(`NAS 업로드 실패 (${resp.status}): ${msg}`);
   }
 
-  // 예상 응답 키: rel_path (우선), path/key 등도 허용
-  const relPath =
-    js?.rel_path ||
-    js?.relPath ||
-    js?.path ||
-    js?.key ||
-    "";
+  const relPath = js?.rel_path || js?.relPath || js?.path || js?.key || js?.rel || "";
+  if (!relPath) throw new Error("NAS 업로드 응답에 rel_path(또는 path)가 없습니다.");
 
-  if (!relPath) {
-    throw new Error("NAS 업로드 응답에 rel_path가 없습니다.");
-  }
-
-  // URL은 있으면 쓰고, 없으면 public base로 조합
+  // NAS_FILE_BASE=/public 이면 public get으로 조합
   const url = isHttpUrl(js?.url) ? String(js.url) : joinUrl(NAS_FILE_BASE, String(relPath).replace(/^\//, ""));
   return { rel_path: String(relPath).replace(/^\//, ""), url };
 }
+
 
 async function nasDeleteByPathOrUrl(storagePath) {
   if (!NAS_DELETE_URL) return;
