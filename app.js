@@ -1354,7 +1354,7 @@ function renderJobSelect() {
     onclick: async () => {
       try {
         const project_name = safeText(pj.value);
-        if (!project_name) throw new Error("현장명을 입력해 주세요.");
+        if (!project_name) throw new Error("공사명을 입력해 주세요.");
 
         setFoot("현장을 생성 중입니다...");
         const job = await createJob({
@@ -1677,4 +1677,5 @@ function renderJobWork() {
     render();
   }
 })();
+
 
