@@ -236,6 +236,7 @@ const state = {
     items: [],
     index: 0,
     zoom: 1,
+    reqId: 0,
   },
 };
 
@@ -406,20 +407,27 @@ modalAccept?.addEventListener("click", async () => {
 /** =========================
  *  Viewer
  *  ========================= */
-function viewerRoleOrder() {
-  return state.mode === "density" ? ["measurement"] : ["start", "end"];
+function viewerRoleOrder(sample) {
+  // 썸네일 role 값이 start/end/measurement/single 등으로 들어올 수 있어서
+  // 모드별로 유연하게 처리한다.
+  if (state.mode === "density") {
+    // 농도는 단일 사진인데 role이 measurement 또는 single로 저장될 수 있음
+    const keys = Object.keys(sample?._photoPath || {});
+    if (keys.length) return keys;
+    return ["measurement", "single"];
+  }
+  // 비산은 기본 start/end + 단일/추가 사진 대응
+  return ["start", "end", "single"];
 }
-
 function buildViewerItemsForDate(dateISO) {
   const samples = state.samplesByDate.get(dateISO) || [];
-  const roles = viewerRoleOrder();
   const items = [];
   const sorted = [...samples].sort((a, b) => (a.p_index || 0) - (b.p_index || 0));
 
   for (const s of sorted) {
     const loc = safeText(s.sample_location, "미입력");
     const label = `P${s.p_index || "?"} · ${loc}`;
-    for (const role of roles) {
+    for (const role of viewerRoleOrder(s)) {
       const path = s._photoPath?.[role];
       if (!path) continue;
       items.push({
@@ -493,11 +501,25 @@ async function renderViewer() {
   if (viewerTitle) viewerTitle.textContent = "미리보기";
   if (viewerLabel) viewerLabel.textContent = `${item.label} · ${roleLabel(item.role)}`;
 
-  // resolve url
+  // resolve url (race-safe)
+  const myReq = ++state.viewer.reqId;
   try {
-    const url = await resolvePhotoUrl(item.storage_path);
-    if (viewerImg) viewerImg.src = url;
+    const url = await resolvePhotoUrl(item.storage_path, item.sample_id, item.role);
+    if (!viewerImg) return;
+    // 다른 사진으로 넘어간 뒤 늦게 응답이 오면 무시
+    if (myReq !== state.viewer.reqId) return;
+
+    // iOS/Safari에서 간헐적으로 갱신이 안 되는 케이스 방지
+    viewerImg.removeAttribute("src");
+    viewerImg.src = url;
+
+    // 로딩 실패 시 사용자 피드백
+    viewerImg.onerror = () => {
+      if (myReq !== state.viewer.reqId) return;
+      setFoot("미리보기 로딩 실패(네트워크/권한/CORS).");
+    };
   } catch (e) {
+    if (myReq !== state.viewer.reqId) return;
     setFoot(`미리보기 URL 생성 실패: ${e?.message || e}`);
   }
 
@@ -1087,7 +1109,6 @@ async function loadJobs() {
 }
 
 async function loadJob(job) {
-  const keepActiveDate = state.activeDate;
   state.job = job;
   state.samplesByDate = new Map();
   state.dates = [];
@@ -1101,7 +1122,7 @@ async function loadJob(job) {
 
   const dates = Array.from(new Set(samples.map((s) => s.measurement_date))).sort();
   state.dates = dates;
-  state.activeDate = (keepActiveDate && dates.includes(keepActiveDate)) ? keepActiveDate : (dates[0] || new Date().toISOString().slice(0, 10));
+  state.activeDate = dates[0] || new Date().toISOString().slice(0, 10);
 
   for (const d of dates) state.samplesByDate.set(d, []);
   for (const s of samples) {
@@ -1344,7 +1365,7 @@ function renderJobSelect() {
   const list = el("div", { class: "list" });
 
   // add job card
-  const pj = el("input", { class: "input", placeholder: "공사명" });
+  const pj = el("input", { class: "input", placeholder: "현장명(프로젝트명)" });
   const addr = el("input", { class: "input", placeholder: "주소" });
   const cont = el("input", { class: "input", placeholder: "시공사" });
 
@@ -1354,7 +1375,7 @@ function renderJobSelect() {
     onclick: async () => {
       try {
         const project_name = safeText(pj.value);
-        if (!project_name) throw new Error("공사명을 입력해 주세요.");
+        if (!project_name) throw new Error("현장명을 입력해 주세요.");
 
         setFoot("현장을 생성 중입니다...");
         const job = await createJob({
@@ -1429,7 +1450,7 @@ function renderJobWork() {
   const job = state.job;
 
   // date tabs
-  const tabs = el("div", { class: "tabs" });
+  const tabs = el("div", { class: "tabs", style: "margin:10px 0;" });
   for (const d of state.dates) {
     tabs.appendChild(
       el("button", {
@@ -1444,9 +1465,9 @@ function renderJobWork() {
     );
   }
 
-  const dateAdd = el("input", { class: "input dateInput", type: "date", value: iso10(state.activeDate) });
+  const dateAdd = el("input", { class: "input", type: "date", value: iso10(state.activeDate) });
   const dateAddBtn = el("button", {
-    class: "btn small",
+    class: "btn",
     text: "날짜 추가/이동",
     onclick: () => {
       const v = iso10(dateAdd.value);
@@ -1459,12 +1480,6 @@ function renderJobWork() {
       render();
     },
   });
-
-
-  const dateRow = el("div", { class: "dateRow" }, [
-    el("div", { style: "flex:1; min-width:220px;" }, [tabs]),
-    el("div", { class: "dateControls" }, [dateAdd, dateAddBtn]),
-  ]);
 
   // add sample
   const SCATTER_LOCATIONS = [
@@ -1539,8 +1554,12 @@ function renderJobWork() {
         el("div", { class: "item-title", text: safeText(job.project_name, "(현장)") }),
         el("div", { class: "item-sub", text: [modeLabel(state.mode), safeText(job.address)].filter(Boolean).join(" · ") }),
       ]),
+      el("div", { class: "row", style: "gap:8px;" }, [
+        dateAdd,
+        dateAddBtn,
+      ]),
     ]),
-    dateRow,
+    tabs,
     el("div", { class: "row", style: "margin-top:10px;" }, [
       el("div", { class: "col", style: "flex:1; min-width:240px;" }, [
         el("div", { class: "label", text: `시료 추가 · ${ymdDots(state.activeDate)}` }),
@@ -1566,8 +1585,7 @@ function renderJobWork() {
   }
 
   for (const s of samples) {
-    const roles = viewerRoleOrder();
-
+  
     const left = el("div", { class: "sampleLeft" }, [
       el("div", { class: "sampleTitle", text: `P${s.p_index || "?"} · ${safeText(s.sample_location, "미입력")}` }),
       el("div", { class: "sampleMeta" }, [
@@ -1600,7 +1618,7 @@ function renderJobWork() {
 
     const right = el("div", { class: `sampleRight ${state.mode}` });
 
-    for (const role of roles) {
+    for (const role of viewerRoleOrder(s)) {
       const status = s._photoState?.[role] || "";
       const dot = el("div", { class: dotClass(status) });
 
@@ -1677,5 +1695,3 @@ function renderJobWork() {
     render();
   }
 })();
-
-
