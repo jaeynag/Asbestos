@@ -225,8 +225,6 @@ const state = {
   authTab: "login", // login|signup
   authMsg: "",
 
-
-  authForm: { email: \"\", name: \"\", pw: \"\", pw2: \"\" },
   addOpen: false,
   addLoc: "",
   addTime: "",
@@ -249,6 +247,7 @@ const state = {
 const root = document.getElementById("root");
 const btnBack = document.getElementById("btnBack");
 const btnGear = document.getElementById("btnGear");
+const appTitleEl = document.querySelector(".topbar .h1");
 const settingsMenu = document.getElementById("settingsMenu");
 const menuChangeMode = document.getElementById("menuChangeMode");
 const menuChangeCompany = document.getElementById("menuChangeCompany");
@@ -298,6 +297,14 @@ function updateHeader() {
 
   if (menuChangeMode) menuChangeMode.disabled = !state.mode;
   if (menuChangeCompany) menuChangeCompany.disabled = !state.company;
+
+  // Title
+  const baseTitle = "Asbestos field photos";
+  let title = baseTitle;
+  if (state.user && state.company) title = safeText(state.company?.name, baseTitle);
+  if (appTitleEl) appTitleEl.textContent = title;
+  try { document.title = title; } catch {}
+
 }
 
 function goBack() {
@@ -374,105 +381,6 @@ menuSignOut?.addEventListener("click", async () => {
   render();
 });
 
-
-/** =========================
- *  Lightweight info overlay
- *  ========================= */
-function showSignupComplete(uuid, email) {
-  // uuid may be empty if provider didn't return it (rare)
-  const u = String(uuid || "").trim();
-  const overlay = el("div", {
-    style: [
-      "position:fixed",
-      "inset:0",
-      "background:rgba(0,0,0,0.35)",
-      "display:flex",
-      "align-items:center",
-      "justify-content:center",
-      "padding:18px",
-      "z-index:9999",
-    ].join(";"),
-  });
-
-  const title = el("div", { style: "font-weight:800; font-size:18px; margin-bottom:10px;", text: "회원가입 신청 완료" });
-  const lines = [
-    "회원가입 신청이 완료되었습니다.",
-    "담당자에게 UUID를 발송하여 접근권한을 받으세요.",
-    "승인 후 로그인하면 회사/현장이 보입니다.",
-  ];
-
-  const body = el("div", { style: "color:#333; font-size:14px; line-height:1.55; white-space:pre-line;" });
-  body.textContent = lines.join("\n");
-
-  const uuidLabel = el("div", { style: "margin-top:12px; font-size:12px; color:#666; font-weight:700;", text: "UUID" });
-  const uuidBox = el("div", {
-    style: [
-      "margin-top:6px",
-      "padding:10px 12px",
-      "border:1px solid #e6e6e6",
-      "border-radius:12px",
-      "background:#fafafa",
-      "font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
-      "font-size:12px",
-      "word-break:break-all",
-    ].join(";"),
-    text: u || "(UUID를 가져오지 못했습니다. 담당자에게 이메일을 전달해 주세요.)",
-  });
-
-  const hint = el("div", { style: "margin-top:8px; font-size:12px; color:#888;" });
-  hint.textContent = email ? `가입 이메일: ${email}` : "";
-
-  const copyMsg = el("div", { style: "margin-top:8px; font-size:12px; color:#666;" });
-
-  async function copyUuid() {
-    if (!u) return;
-    try {
-      await navigator.clipboard.writeText(u);
-      copyMsg.textContent = "UUID가 복사되었습니다.";
-    } catch {
-      // Fallback: select text and execCommand
-      try {
-        const ta = el("textarea", { style: "position:absolute; left:-9999px; top:-9999px;" });
-        ta.value = u;
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand("copy");
-        document.body.removeChild(ta);
-        copyMsg.textContent = "UUID가 복사되었습니다.";
-      } catch {
-        copyMsg.textContent = "복사에 실패했습니다. UUID를 길게 눌러 복사해 주세요.";
-      }
-    }
-  }
-
-  const btnCopy = el("button", { class: "btn", style: "margin-top:10px; width:100%;", text: "UUID 복사", onclick: copyUuid });
-  const btnOk = el("button", {
-    class: "btn primary",
-    style: "margin-top:10px; width:100%;",
-    text: "확인",
-    onclick: () => {
-      try { overlay.remove(); } catch {}
-    },
-  });
-
-  const card = el("div", {
-    style: [
-      "width:min(520px, 100%)",
-      "background:white",
-      "border-radius:16px",
-      "padding:16px",
-      "box-shadow:0 10px 30px rgba(0,0,0,0.18)",
-    ].join(";"),
-  }, [title, body, uuidLabel, uuidBox, hint, btnCopy, copyMsg, btnOk]);
-
-  overlay.addEventListener("click", (ev) => {
-    if (ev.target === overlay) btnOk.click();
-  });
-
-  overlay.appendChild(card);
-  document.body.appendChild(overlay);
-}
-
 /** =========================
  *  Modal
  *  ========================= */
@@ -516,8 +424,8 @@ function viewerRoleOrder(sample) {
     // 농도는 사진 1장만: UI/뷰어에서는 항상 measurement 슬롯만 사용
     return ["measurement"];
   }
-  // 비산은 기본 start/end + 단일/추가 사진 대응
-  return ["start", "end", "single"];
+  // 비산은 전/후(시작/완료)만 사용
+  return ["start", "end"];
 }
 function buildViewerItemsForDate(dateISO) {
   const samples = state.samplesByDate.get(dateISO) || [];
@@ -948,7 +856,7 @@ async function nasFetchBlobUrl(relPath) {
   const url = joinUrl(NAS_GATEWAY_URL, `object/authenticated/${enc}`);
 
   const auth = await getNasAuthorization();
-  const resp = await fetch(url, { method: "GET", headers: auth ? { Authorization: auth } : undefined });
+  const resp = await fetchWithTimeoutRetry(url, { method: "GET", headers: auth ? { Authorization: auth } : undefined }, 15000, 1);
   if (!resp.ok) {
     const msg = await resp.text().catch(() => "");
     throw new Error(`NAS 파일 조회 실패 (${resp.status}): ${msg || "요청이 거부되었습니다."}`);
@@ -960,7 +868,202 @@ async function nasFetchBlobUrl(relPath) {
 /** =========================
  *  Thumbnails
  *  ========================= */
-function ensureThumbUrl(sample, role) {
+
+const THUMB_MAX_CONCURRENCY = 4;
+const THUMB_RENDER_DEBOUNCE_MS = 120;
+
+let _renderTimer = null;
+function scheduleRender() {
+  if (_renderTimer) return;
+  _renderTimer = setTimeout(() => {
+    _renderTimer = null;
+    render();
+  }, THUMB_RENDER_DEBOUNCE_MS);
+}
+
+function cleanupThumbBlobs(samples) {
+  try {
+    for (const s of samples || []) {
+      const blobs = s?._thumbBlobUrl;
+      if (!blobs) continue;
+      for (const k of Object.keys(blobs)) {
+        const u = blobs[k];
+        if (typeof u === "string" && u.startsWith("blob:")) {
+          try {
+            URL.revokeObjectURL(u);
+          } catch {}
+        }
+      }
+      s._thumbBlobUrl = {};
+    }
+  } catch {}
+}
+
+function _setThumbUrl(sample, role, url, expMs) {
+  sample._thumbUrl ||= {};
+  sample._thumbExp ||= {};
+  sample._thumbBlobUrl ||= {};
+
+  const prevBlob = sample._thumbBlobUrl[role];
+  if (prevBlob && prevBlob !== url && typeof prevBlob === "string" && prevBlob.startsWith("blob:")) {
+    try {
+      URL.revokeObjectURL(prevBlob);
+    } catch {}
+  }
+
+  sample._thumbUrl[role] = url;
+  if (typeof expMs === "number") sample._thumbExp[role] = expMs;
+
+  if (typeof url === "string" && url.startsWith("blob:")) {
+    sample._thumbBlobUrl[role] = url;
+  } else {
+    delete sample._thumbBlobUrl[role];
+  }
+}
+
+// 네트워크 없는(저렴한) 썸네일 프리셋: http / nas public만 세팅
+function primeThumbUrl(sample, role) {
+  const path = sample._photoPath?.[role];
+  if (!path) return;
+
+  if (isHttpUrl(path)) {
+    _setThumbUrl(sample, role, path, Date.now() + 365 * 24 * 3600 * 1000);
+    return;
+  }
+
+  if (typeof path === "string" && path.startsWith("nas:") && NAS_FILE_BASE) {
+    const rel = path.slice(4).replace(/^\//, "");
+    _setThumbUrl(sample, role, joinUrl(NAS_FILE_BASE, rel), Date.now() + 365 * 24 * 3600 * 1000);
+  }
+}
+
+function updateThumbInDom(sampleId, role, url) {
+  try {
+    const sel = `.thumbMini[data-sid="${sampleId}"][data-role="${role}"]`;
+    const wrap = document.querySelector(sel);
+    if (!wrap) return false;
+
+    // placeholder -> img
+    const existing = wrap.querySelector("img");
+    if (existing) {
+      existing.src = url;
+      return true;
+    }
+
+    wrap.innerHTML = "";
+    const dateISO = wrap.getAttribute("data-date") || state.activeDate;
+    wrap.appendChild(
+      el("img", {
+        src: url,
+        alt: roleLabel(role),
+        onclick: () => openViewerAt(dateISO, sampleId, role),
+      })
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function fetchWithTimeoutRetry(url, init, timeoutMs = 15000, retries = 1) {
+  let lastErr;
+  const tries = Math.max(1, (retries ?? 0) + 1);
+
+  for (let i = 0; i < tries; i++) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const resp = await fetch(url, { ...(init || {}), signal: ctrl.signal });
+      clearTimeout(t);
+      return resp;
+    } catch (e) {
+      clearTimeout(t);
+      lastErr = e;
+      // 타임아웃/네트워크 흔들림 대응: 짧게 텀
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
+  throw lastErr;
+}
+
+let _thumbQueue = [];
+let _thumbRunning = 0;
+
+function _getSampleById(id) {
+  if (state.sampleById && typeof state.sampleById.get === "function") {
+    const v = state.sampleById.get(id);
+    if (v) return v;
+  }
+  // fallback
+  for (const arr of state.samplesByDate?.values?.() || []) {
+    for (const s of arr || []) if (s?.id === id) return s;
+  }
+  return null;
+}
+
+function queueThumb(sampleId, role, opts) {
+  const s = _getSampleById(sampleId);
+  if (!s) return;
+
+  s._thumbQueued ||= {};
+  if (s._thumbLoading?.[role] || s._thumbQueued[role]) return;
+  s._thumbQueued[role] = true;
+
+  _thumbQueue.push({ sampleId, role, opts: opts || {} });
+  pumpThumbQueue();
+}
+
+function pumpThumbQueue() {
+  while (_thumbRunning < THUMB_MAX_CONCURRENCY && _thumbQueue.length) {
+    const task = _thumbQueue.shift();
+    _thumbRunning += 1;
+
+    (async () => {
+      try {
+        const s = _getSampleById(task.sampleId);
+        if (s) await ensureThumbUrl(s, task.role, task.opts);
+      } catch (e) {
+        console.warn("썸네일 로딩 실패:", e);
+      } finally {
+        const s = _getSampleById(task.sampleId);
+        if (s && s._thumbQueued) s._thumbQueued[task.role] = false;
+        _thumbRunning -= 1;
+        pumpThumbQueue();
+      }
+    })();
+  }
+}
+
+let _thumbObserver = null;
+function observeThumb(elm, sampleId, role) {
+  try {
+    if (typeof IntersectionObserver === "undefined") {
+      queueThumb(sampleId, role);
+      return;
+    }
+    if (!_thumbObserver) {
+      _thumbObserver = new IntersectionObserver(
+        (entries) => {
+          for (const ent of entries) {
+            if (!ent.isIntersecting) continue;
+            const el = ent.target;
+            _thumbObserver.unobserve(el);
+
+            const sid = el.getAttribute("data-sid");
+            const r = el.getAttribute("data-role");
+            if (sid && r) queueThumb(sid, r);
+          }
+        },
+        { root: null, threshold: 0.05 }
+      );
+    }
+    _thumbObserver.observe(elm);
+  } catch {
+    queueThumb(sampleId, role);
+  }
+}
+
+async function ensureThumbUrl(sample, role, opts) {
   const path = sample._photoPath?.[role];
   if (!path) return;
 
@@ -968,69 +1071,51 @@ function ensureThumbUrl(sample, role) {
   sample._thumbExp ||= {};
   sample._thumbLoading ||= {};
 
-  // full URL이면 그대로
-  if (isHttpUrl(path)) {
-    sample._thumbUrl[role] = path;
-    sample._thumbExp[role] = Date.now() + 365 * 24 * 3600 * 1000;
-    return;
-  }
-
-  // nas: 접두
-  if (typeof path === "string" && path.startsWith("nas:")) {
-    const rel = path.slice(4).replace(/^\//, "");
-
-    const now = Date.now();
-    const exp = sample._thumbExp[role] || 0;
-    if (sample._thumbUrl[role] && exp > now + 15_000) return;
-
-    if (sample._thumbLoading[role]) return;
-    sample._thumbLoading[role] = true;
-
-    (async () => {
-      try {
-        // 1) public URL로 먼저 세팅 (NAS가 public 허용이면 이걸로 끝)
-        if (NAS_FILE_BASE) {
-          sample._thumbUrl[role] = joinUrl(NAS_FILE_BASE, rel);
-          sample._thumbExp[role] = Date.now() + 365 * 24 * 3600 * 1000;
-        }
-
-        // 2) public이 막혀있으면 img는 깨짐 → Authorization으로 blob URL 생성해서 교체
-        const auth = await getNasAuthorization();
-        if (auth) {
-          const blobUrl = await nasFetchBlobUrl(rel);
-          sample._thumbUrl[role] = blobUrl;
-          sample._thumbExp[role] = Date.now() + 365 * 24 * 3600 * 1000;
-        }
-      } catch (e) {
-        console.warn("NAS 썸네일 생성 실패:", e);
-      } finally {
-        sample._thumbLoading[role] = false;
-        render();
-      }
-    })();
-
-    return;
-  }
-
   const now = Date.now();
   const exp = sample._thumbExp[role] || 0;
-  if (sample._thumbUrl[role] && exp > now + 15_000) return;
+  if (sample._thumbUrl[role] && exp > now + 15_000 && !opts?.force) return;
 
   if (sample._thumbLoading[role]) return;
   sample._thumbLoading[role] = true;
 
-  (async () => {
-    try {
-      const url = await getSignedUrl(path);
-      sample._thumbUrl[role] = url;
-      sample._thumbExp[role] = Date.now() + SIGNED_URL_TTL_SEC * 1000;
-    } catch (e) {
-      console.error("Signed URL 생성 실패:", e);
-    } finally {
-      sample._thumbLoading[role] = false;
-      render();
+  try {
+    // full URL이면 그대로
+    if (isHttpUrl(path)) {
+      _setThumbUrl(sample, role, path, Date.now() + 365 * 24 * 3600 * 1000);
+      updateThumbInDom(sample.id, role, path);
+      return;
     }
-  })();
+
+    // nas: 접두 (기본은 public URL만, 실패 시 onerror에서 force blob)
+    if (typeof path === "string" && path.startsWith("nas:")) {
+      const rel = path.slice(4).replace(/^\//, "");
+
+      if (NAS_FILE_BASE) {
+        const pub = joinUrl(NAS_FILE_BASE, rel);
+        _setThumbUrl(sample, role, pub, Date.now() + 365 * 24 * 3600 * 1000);
+        updateThumbInDom(sample.id, role, pub);
+      }
+
+      if (!opts?.nasForceBlob) return;
+
+      const auth = await getNasAuthorization();
+      if (auth) {
+        const blobUrl = await nasFetchBlobUrl(rel);
+        _setThumbUrl(sample, role, blobUrl, Date.now() + 365 * 24 * 3600 * 1000);
+        if (!updateThumbInDom(sample.id, role, blobUrl)) scheduleRender();
+      }
+      return;
+    }
+
+    // Supabase Storage signed URL
+    const url = await getSignedUrl(path);
+    _setThumbUrl(sample, role, url, Date.now() + SIGNED_URL_TTL_SEC * 1000);
+    if (!updateThumbInDom(sample.id, role, url)) scheduleRender();
+  } catch (e) {
+    console.error("썸네일 생성 실패:", e);
+  } finally {
+    sample._thumbLoading[role] = false;
+  }
 }
 
 /** =========================
@@ -1182,6 +1267,10 @@ async function deleteJobAndRelated(job) {
 
     // 1) load samples
     const samples = await fetchSamples(job.id);
+
+  state.sampleById = new Map((samples || []).map((s) => [s.id, s]));
+
+  state.sampleById = new Map((samples || []).map((s) => [s.id, s]));
     const sampleIds = (samples || []).map((s) => s.id);
 
     // 2) photos
@@ -1252,6 +1341,9 @@ async function loadJobs() {
 }
 
 async function loadJob(job) {
+  // 기존 현장 썸네일 blob 정리(메모리 누수 방지)
+  cleanupThumbBlobs(Array.from(state.sampleById?.values?.() || []));
+
   state.job = job;
   state.samplesByDate = new Map();
   state.dates = [];
@@ -1293,7 +1385,7 @@ async function loadJob(job) {
 
     s._photoState[role] = p.state === "failed" ? "failed" : "done";
     s._photoPath[role] = p.storage_path;
-    ensureThumbUrl(s, role);
+    primeThumbUrl(s, role);
   }
 
   // 날짜가 없으면 오늘을 탭으로 만들어서 추가 UX
@@ -1339,38 +1431,10 @@ function render() {
 
 /** ===== Auth ===== */
 function renderAuth() {
-  // keep values across re-render
-  if (!state.authForm) state.authForm = { email: "", name: "", pw: "", pw2: "" };
-
-  const email = el("input", {
-    class: "input",
-    type: "email",
-    placeholder: "이메일",
-    value: state.authForm.email || "",
-    oninput: (e) => { state.authForm.email = e.target.value; },
-  });
-  const name = el("input", {
-    class: "input",
-    type: "text",
-    placeholder: "이름 (회원가입)",
-    value: state.authForm.name || "",
-    oninput: (e) => { state.authForm.name = e.target.value; },
-  });
-  const pw = el("input", {
-    class: "input",
-    type: "password",
-    placeholder: "비밀번호",
-    value: state.authForm.pw || "",
-    oninput: (e) => { state.authForm.pw = e.target.value; },
-  });
-  const pw2 = el("input", {
-    class: "input",
-    type: "password",
-    placeholder: "비밀번호 확인",
-    value: state.authForm.pw2 || "",
-    oninput: (e) => { state.authForm.pw2 = e.target.value; },
-  });
-
+  const email = el("input", { class: "input", type: "email", placeholder: "이메일" });
+  const name = el("input", { class: "input", type: "text", placeholder: "이름 (회원가입)" });
+  const pw = el("input", { class: "input", type: "password", placeholder: "비밀번호" });
+  const pw2 = el("input", { class: "input", type: "password", placeholder: "비밀번호 확인" });
   const msg = el("div", { style: "margin-top:10px; color:#666; font-size:13px;" });
   msg.textContent = state.authMsg || "";
 
@@ -1381,9 +1445,6 @@ function renderAuth() {
       onclick: () => {
         state.authTab = "login";
         state.authMsg = "";
-        // 로그인 전환 시 비밀번호만 비움
-        state.authForm.pw = "";
-        state.authForm.pw2 = "";
         render();
       },
     }),
@@ -1393,25 +1454,10 @@ function renderAuth() {
       onclick: () => {
         state.authTab = "signup";
         state.authMsg = "";
-        // 회원가입 전환 시 비밀번호만 비움
-        state.authForm.pw = "";
-        state.authForm.pw2 = "";
         render();
       },
     }),
   ]);
-
-  function _clearSignupFieldsByError(message) {
-    const m = String(message || "");
-    // 공통: 비밀번호는 항상 비움
-    state.authForm.pw = "";
-    state.authForm.pw2 = "";
-
-    // 이메일만 비워야 하는 케이스(중복/형식 등)
-    const emailDup = /이미\s*가입|중복|already\s*registered|user\s*already\s*registered|already\s*exists/i.test(m);
-    const emailInvalid = /invalid\s*email|이메일.*형식|email.*형식/i.test(m);
-    if (emailDup || emailInvalid) state.authForm.email = "";
-  }
 
   const btn = el("button", {
     class: "btn primary",
@@ -1421,15 +1467,15 @@ function renderAuth() {
         state.authMsg = "";
         setFoot("처리 중입니다...");
 
-        const e = normEmail(state.authForm.email);
-        const p = state.authForm.pw || "";
+        const e = normEmail(email.value);
+        const p = pw.value || "";
         if (!e || !p) throw new Error("이메일과 비밀번호를 입력해 주세요.");
 
         if (state.authTab === "signup") {
-          const n = safeText(state.authForm.name);
+          const n = safeText(name.value);
           if (!n) throw new Error("이름을 입력해 주세요.");
           if (p.length < 6) throw new Error("비밀번호는 6자 이상 권장");
-          if ((state.authForm.pw2 || "") !== p) throw new Error("비밀번호 확인이 일치하지 않습니다.");
+          if ((pw2.value || "") !== p) throw new Error("비밀번호 확인이 일치하지 않습니다.");
 
           const exists = await emailExists(e);
           if (exists === true) throw new Error("이미 가입된 이메일입니다.");
@@ -1443,32 +1489,15 @@ function renderAuth() {
           });
           if (error) throw error;
 
-          // 가입 직후 자동 로그인(세션이 있는 경우)도 있을 수 있음
-          const uuid = data?.user?.id || "";
-          // 성공 안내 + UUID 복사 안내
-          showSignupComplete(uuid, e);
-
-          // 다음 동작 안내: 보통은 승인 후 로그인
-          state.authMsg = "회원가입 신청이 완료되었습니다. UUID를 복사해 담당자에게 전달해 주세요.";
-          setFoot("회원가입 신청 완료");
-
-          // 화면은 로그인 탭으로 돌려주고, 이메일은 남겨둠
-          state.authTab = "login";
-          state.authForm.email = e;
-          state.authForm.pw = "";
-          state.authForm.pw2 = "";
-
-          // 세션이 생겼다면 그대로 들어가도 되지만, 승인제 운영을 가정하면 바로 진입보다 안내가 더 안전함.
-          // 그래도 세션이 있는 경우엔 회사 목록을 로드해둔다.
           if (data?.session) {
-            try {
-              await loadSession();
-              await loadCompanies();
-            } catch {
-              // ignore
-            }
+            await loadSession();
+            await loadCompanies();
+            render();
+            return;
           }
 
+          state.authMsg = "회원가입이 완료되었습니다. 이메일 인증을 사용 중이라면 메일 확인 후 로그인해 주세요.";
+          setFoot("회원가입이 완료되었습니다.");
           render();
           return;
         }
@@ -1484,15 +1513,6 @@ function renderAuth() {
         const m = err?.message || String(err);
         state.authMsg = m;
         setFoot(m);
-
-        if (state.authTab === "signup") {
-          _clearSignupFieldsByError(m);
-        } else {
-          // 로그인 실패 시 비밀번호만 비움
-          state.authForm.pw = "";
-          state.authForm.pw2 = "";
-        }
-
         render();
       }
     },
@@ -1517,6 +1537,113 @@ function renderAuth() {
   root.appendChild(card);
 }
 
+
+/** ===== Swipe (left to delete) ===== */
+function createSwipeRow({ content, onDelete, onOpen, deleteText = "삭제", ignoreInteractive = true }) {
+  const wrap = el("div", { class: "swipeRow" });
+  const actions = el("div", { class: "swipeActions" }, [
+    el("button", {
+      class: "swipeDeleteBtn",
+      text: deleteText,
+      onclick: (ev) => {
+        ev.stopPropagation();
+        if (typeof onDelete === "function") onDelete();
+      },
+      type: "button",
+    }),
+  ]);
+
+  const contentWrap = el("div", { class: "swipeContent" }, [content]);
+
+  wrap.appendChild(actions);
+  wrap.appendChild(contentWrap);
+
+  const OPEN_X = -92;
+  const THRESH_OPEN = OPEN_X / 2; // -46
+  let isOpen = false;
+  let dragging = false;
+  let startX = 0;
+  let startY = 0;
+  let baseX = 0;
+  let lastX = 0;
+  let justDragged = false;
+
+  function applyX(x) {
+    lastX = x;
+    contentWrap.style.transform = `translateX(${x}px)`;
+    contentWrap.dataset.x = String(x);
+  }
+  function setOpen(v) {
+    isOpen = !!v;
+    wrap.classList.toggle("open", isOpen);
+    contentWrap.style.transition = "transform .15s ease";
+    applyX(isOpen ? OPEN_X : 0);
+    setTimeout(() => { contentWrap.style.transition = ""; }, 180);
+  }
+
+  // click behavior: open action -> close, else onOpen
+  contentWrap.addEventListener("click", (ev) => {
+    if (justDragged) return;
+    if (isOpen) {
+      ev.stopPropagation();
+      setOpen(false);
+      return;
+    }
+    if (typeof onOpen === "function") onOpen(ev);
+  });
+
+  contentWrap.addEventListener("pointerdown", (ev) => {
+    if (ignoreInteractive) {
+      const t = ev.target;
+      if (t && t.closest && t.closest("button,input,select,textarea,a,label")) return;
+    }
+    startX = ev.clientX;
+    startY = ev.clientY;
+    baseX = isOpen ? OPEN_X : 0;
+    dragging = false;
+    justDragged = false;
+    contentWrap.setPointerCapture(ev.pointerId);
+  });
+
+  contentWrap.addEventListener("pointermove", (ev) => {
+    const dx = ev.clientX - startX;
+    const dy = ev.clientY - startY;
+
+    if (!dragging) {
+      if (Math.abs(dx) < 7) return;
+      if (Math.abs(dx) <= Math.abs(dy) + 2) return; // keep scroll
+      dragging = true;
+      wrap.classList.add("dragging");
+      contentWrap.style.transition = "none";
+    }
+
+    // dragging
+    let x = baseX + dx;
+    if (x > 0) x = 0;
+    if (x < OPEN_X) x = OPEN_X;
+    applyX(x);
+    if (ev.cancelable) ev.preventDefault();
+    ev.stopPropagation();
+  });
+
+  function endDrag() {
+    if (!dragging) return;
+    dragging = false;
+    wrap.classList.remove("dragging");
+    justDragged = true;
+    setTimeout(() => { justDragged = false; }, 0);
+
+    contentWrap.style.transition = "";
+    setOpen(lastX < THRESH_OPEN);
+  }
+
+  contentWrap.addEventListener("pointerup", endDrag);
+  contentWrap.addEventListener("pointercancel", endDrag);
+
+  return wrap;
+}
+
+
 /** ===== Company ===== */
 function renderCompanySelect() {
   const list = el("div", { class: "list" });
@@ -1525,29 +1652,28 @@ function renderCompanySelect() {
     list.appendChild(el("div", { class: "card", text: "회사 목록이 비어 있습니다." }));
   } else {
     for (const c of state.companies) {
-      list.appendChild(
-        el("div", { class: "item" }, [
-          el("div", {}, [
-            el("div", { class: "item-title", text: c.name }),
-          ]),
-          el("button", {
-            class: "btn primary",
-            text: "선택",
-            onclick: async () => {
-              state.company = c;
-              state.mode = null;
-              state.job = null;
-              await loadJobs().catch(() => null);
-              render();
-            },
-          }),
-        ])
-      );
+      const item = el("div", {
+        class: "item clickable",
+        onclick: async () => {
+          state.company = c;
+          state.mode = null;
+          state.job = null;
+          await loadJobs().catch(() => null);
+          render();
+        },
+      }, [
+        el("div", {}, [
+          el("div", { class: "item-title", text: c.name }),
+        ]),
+        el("div", { class: "chev", text: "›" }),
+      ]);
+
+      list.appendChild(item);
     }
   }
 
   root.appendChild(el("div", { class: "card" }, [
-    el("div", { class: "label", text: "회사 선택" }),
+    el("div", { class: "label sectionLabel", text: "회사 목록" }),
     list,
   ]));
 }
@@ -1555,28 +1681,32 @@ function renderCompanySelect() {
 /** ===== Mode ===== */
 function renderModeSelect() {
   const wrap = el("div", { class: "card" }, [
-    el("div", { class: "label", text: `업무 선택 · ${state.company?.name || ""}` }),
-    el("div", { class: "tabs", style: "margin-top:10px;" }, [
+    el("div", { class: "label", text: "업무 선택" }),
+    el("div", { class: "choiceGrid" }, [
       el("button", {
-        class: "tab" + (state.mode === "density" ? " active" : ""),
-        text: "농도",
+        class: "choiceCard",
+        type: "button",
         onclick: async () => {
           state.mode = "density";
           state.job = null;
           await loadJobs();
           render();
         },
-      }),
+      }, [
+        el("div", { class: "choiceTitle", text: "농도" }),
+      ]),
       el("button", {
-        class: "tab" + (state.mode === "scatter" ? " active" : ""),
-        text: "비산",
+        class: "choiceCard",
+        type: "button",
         onclick: async () => {
           state.mode = "scatter";
           state.job = null;
           await loadJobs();
           render();
         },
-      }),
+      }, [
+        el("div", { class: "choiceTitle", text: "비산" }),
+      ]),
     ]),
   ]);
 
@@ -1599,6 +1729,16 @@ function renderJobSelect() {
       try {
         const project_name = safeText(pj.value);
         if (!project_name) throw new Error("현장명을 입력해 주세요.");
+
+        // 중복 현장명 방지(같은 회사 + 같은 업무 내에서만)
+        const _normPj = (s) => String(s ?? '').trim().replace(/\s+/g, ' ');
+        const _pjKey = _normPj(project_name);
+        const _dup = (state.jobs || []).some((j) => {
+          if (j?.mode && j.mode !== state.mode) return false;
+          if (j?.company_id && String(j.company_id) !== String(state.company.id)) return false;
+          return _normPj(j?.project_name) === _pjKey;
+        });
+        if (_dup) throw new Error('같은 현장명은 중복될 수 없습니다.');
 
         setFoot("현장을 생성 중입니다...");
         const job = await createJob({
@@ -1641,25 +1781,21 @@ function renderJobSelect() {
     for (const j of state.jobs) {
       const sub = [safeText(j.address), safeText(j.contractor)].filter(Boolean).join(" · ");
 
+      const content = el("div", { class: "item clickable" }, [
+        el("div", {}, [
+          el("div", { class: "item-title", text: safeText(j.project_name, "(이름없음)") }),
+          el("div", { class: "item-sub", text: sub || `생성: ${String(j.created_at || "").slice(0, 10)}` }),
+        ]),
+        el("div", { class: "chev", text: "›" }),
+      ]);
+
       list.appendChild(
-        el("div", { class: "item" }, [
-          el("div", {}, [
-            el("div", { class: "item-title", text: safeText(j.project_name, "(이름없음)") }),
-            el("div", { class: "item-sub", text: sub || `생성: ${String(j.created_at || "").slice(0, 10)}` }),
-          ]),
-          el("div", { class: "row", style: "gap:8px;" }, [
-            el("button", {
-              class: "btn small",
-              text: "삭제",
-              onclick: () => deleteJobAndRelated(j),
-            }),
-            el("button", {
-              class: "btn primary small",
-              text: "열기",
-              onclick: () => loadJob(j),
-            }),
-          ]),
-        ])
+        createSwipeRow({
+          content,
+          onOpen: () => loadJob(j),
+          onDelete: () => deleteJobAndRelated(j),
+          ignoreInteractive: false,
+        })
       );
     }
   }
@@ -1833,9 +1969,7 @@ function renderJobWork() {
                 setFoot(`저장 실패: ${e?.message || e}`);
               }
             },
-          }),
-          el("button", { class: "btn small", text: "삭제", onclick: () => deleteSample(s) }),
-        ]),
+          }),        ]),
       ]),
     ]);
 
@@ -1845,19 +1979,33 @@ function renderJobWork() {
       const status = s._photoState?.[role] || "";
       const dot = el("div", { class: dotClass(status) });
 
-      const thumb = el("div", { class: "thumbMini", title: roleLabel(role) });
+      const thumb = el("div", {
+        class: "thumbMini",
+        title: roleLabel(role),
+        "data-sid": s.id,
+        "data-role": role,
+        "data-date": dateISO,
+      });
+
       const url = s._thumbUrl?.[role];
       if (url) {
-        thumb.appendChild(
-          el("img", {
-            src: url,
-            alt: roleLabel(role),
-            onclick: () => openViewerAt(dateISO, s.id, role),
-          })
-        );
+        const img = el("img", {
+          src: url,
+          alt: roleLabel(role),
+          onclick: () => openViewerAt(dateISO, s.id, role),
+          onerror: () => {
+            // NAS public이 막혀있을 때만 blob fallback
+            const p = s._photoPath?.[role];
+            if (typeof p === "string" && p.startsWith("nas:")) {
+              queueThumb(s.id, role, { nasForceBlob: true, force: true });
+            }
+          },
+        });
+        thumb.appendChild(img);
       } else {
         thumb.appendChild(el("div", { text: roleLabel(role) }));
-        ensureThumbUrl(s, role);
+        // 화면에 들어온 썸네일부터만 로딩(요청 폭탄 방지)
+        if (s._photoPath?.[role]) observeThumb(thumb, s.id, role);
       }
 
       const btns = el("div", { class: "slotBtns" }, [
@@ -1874,7 +2022,8 @@ function renderJobWork() {
       );
     }
 
-    root.appendChild(el("div", { class: "sampleRow" }, [left, right]));
+    const content = el("div", { class: "sampleRow" }, [left, right]);
+    root.appendChild(createSwipeRow({ content, onDelete: () => deleteSample(s), ignoreInteractive: true }));
   }
 }
 
