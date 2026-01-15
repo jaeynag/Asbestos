@@ -236,6 +236,7 @@ const state = {
     items: [],
     index: 0,
     zoom: 1,
+    reqId: 0,
   },
 };
 
@@ -406,37 +407,27 @@ modalAccept?.addEventListener("click", async () => {
 /** =========================
  *  Viewer
  *  ========================= */
-function viewerRoleOrder() {
-  // 기본 우선순위(모달에서 보여줄 순서). 실제로 존재하는 role은 buildViewerItemsForDate에서 자동으로 추가됨.
-  return state.mode === "density"
-    ? ["measurement", "single", "start", "end"]
-    : ["start", "end", "single", "measurement"];
+function viewerRoleOrder(sample) {
+  // 썸네일 role 값이 start/end/measurement/single 등으로 들어올 수 있어서
+  // 모드별로 유연하게 처리한다.
+  if (state.mode === "density") {
+    // 농도는 단일 사진인데 role이 measurement 또는 single로 저장될 수 있음
+    const keys = Object.keys(sample?._photoPath || {});
+    if (keys.length) return keys;
+    return ["measurement", "single"];
+  }
+  // 비산은 기본 start/end + 단일/추가 사진 대응
+  return ["start", "end", "single"];
 }
-
 function buildViewerItemsForDate(dateISO) {
   const samples = state.samplesByDate.get(dateISO) || [];
-  const baseRoles = viewerRoleOrder();
   const items = [];
   const sorted = [...samples].sort((a, b) => (a.p_index || 0) - (b.p_index || 0));
 
   for (const s of sorted) {
     const loc = safeText(s.sample_location, "미입력");
     const label = `P${s.p_index || "?"} · ${loc}`;
-
-    // sample에 실제로 존재하는 role들을 모두 모아서, baseRoles 뒤에 추가
-    const roleSet = new Set(baseRoles);
-    const extra = [];
-    if (s && s._photoPath) {
-      for (const k of Object.keys(s._photoPath)) {
-        if (!roleSet.has(k)) {
-          roleSet.add(k);
-          extra.push(k);
-        }
-      }
-    }
-    const roles = [...baseRoles, ...extra];
-
-    for (const role of roles) {
+    for (const role of viewerRoleOrder(s)) {
       const path = s._photoPath?.[role];
       if (!path) continue;
       items.push({
@@ -506,26 +497,29 @@ async function renderViewer() {
     return;
   }
 
-  // race-safe 토큰 (빠르게 넘길 때 이전 요청이 늦게 도착해서 src를 덮어쓰는 문제 방지)
-  state.viewer.reqId = (state.viewer.reqId || 0) + 1;
-  const reqId = state.viewer.reqId;
-
   viewerModal.hidden = false;
   if (viewerTitle) viewerTitle.textContent = "미리보기";
   if (viewerLabel) viewerLabel.textContent = `${item.label} · ${roleLabel(item.role)}`;
 
-  if (viewerImg) {
-    viewerImg.onerror = () => setFoot("미리보기 로드 실패(권한/URL/네트워크).");
-    // iOS 사파리에서 같은 src 재설정이 씹히는 케이스 방지
-    viewerImg.src = "";
-  }
-
+  // resolve url (race-safe)
+  const myReq = ++state.viewer.reqId;
   try {
-    const url = await resolvePhotoUrl(item.storage_path);
-    if (reqId !== state.viewer.reqId) return; // 사용자가 이미 다른 사진으로 이동함
-    if (viewerImg) viewerImg.src = url;
+    const url = await resolvePhotoUrl(item.storage_path, item.sample_id, item.role);
+    if (!viewerImg) return;
+    // 다른 사진으로 넘어간 뒤 늦게 응답이 오면 무시
+    if (myReq !== state.viewer.reqId) return;
+
+    // iOS/Safari에서 간헐적으로 갱신이 안 되는 케이스 방지
+    viewerImg.removeAttribute("src");
+    viewerImg.src = url;
+
+    // 로딩 실패 시 사용자 피드백
+    viewerImg.onerror = () => {
+      if (myReq !== state.viewer.reqId) return;
+      setFoot("미리보기 로딩 실패(네트워크/권한/CORS).");
+    };
   } catch (e) {
-    if (reqId !== state.viewer.reqId) return;
+    if (myReq !== state.viewer.reqId) return;
     setFoot(`미리보기 URL 생성 실패: ${e?.message || e}`);
   }
 
@@ -1591,8 +1585,7 @@ function renderJobWork() {
   }
 
   for (const s of samples) {
-    const roles = viewerRoleOrder();
-
+  
     const left = el("div", { class: "sampleLeft" }, [
       el("div", { class: "sampleTitle", text: `P${s.p_index || "?"} · ${safeText(s.sample_location, "미입력")}` }),
       el("div", { class: "sampleMeta" }, [
@@ -1625,7 +1618,7 @@ function renderJobWork() {
 
     const right = el("div", { class: `sampleRight ${state.mode}` });
 
-    for (const role of roles) {
+    for (const role of viewerRoleOrder(s)) {
       const status = s._photoState?.[role] || "";
       const dot = el("div", { class: dotClass(status) });
 
