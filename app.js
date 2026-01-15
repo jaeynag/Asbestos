@@ -1673,7 +1673,7 @@ function renderCompanySelect() {
   }
 
   root.appendChild(el("div", { class: "card" }, [
-    el("div", { class: "label", text: "회사 목록" }),
+    el("div", { class: "label sectionLabel", text: "회사 목록" }),
     list,
   ]));
 }
@@ -1694,7 +1694,6 @@ function renderModeSelect() {
         },
       }, [
         el("div", { class: "choiceTitle", text: "농도" }),
-        el("div", { class: "choiceSub", text: "측정 사진 1장" }),
       ]),
       el("button", {
         class: "choiceCard",
@@ -1707,7 +1706,6 @@ function renderModeSelect() {
         },
       }, [
         el("div", { class: "choiceTitle", text: "비산" }),
-        el("div", { class: "choiceSub", text: "시작/완료 사진" }),
       ]),
     ]),
   ]);
@@ -1731,6 +1729,16 @@ function renderJobSelect() {
       try {
         const project_name = safeText(pj.value);
         if (!project_name) throw new Error("현장명을 입력해 주세요.");
+
+        // 중복 현장명 방지(같은 회사 + 같은 업무 내에서만)
+        const _normPj = (s) => String(s ?? '').trim().replace(/\s+/g, ' ');
+        const _pjKey = _normPj(project_name);
+        const _dup = (state.jobs || []).some((j) => {
+          if (j?.mode && j.mode !== state.mode) return false;
+          if (j?.company_id && String(j.company_id) !== String(state.company.id)) return false;
+          return _normPj(j?.project_name) === _pjKey;
+        });
+        if (_dup) throw new Error('같은 현장명은 중복될 수 없습니다.');
 
         setFoot("현장을 생성 중입니다...");
         const job = await createJob({
