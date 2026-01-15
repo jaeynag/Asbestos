@@ -847,7 +847,7 @@ async function nasFetchBlobUrl(relPath) {
   const url = joinUrl(NAS_GATEWAY_URL, `object/authenticated/${enc}`);
 
   const auth = await getNasAuthorization();
-  const resp = await fetch(url, { method: "GET", headers: auth ? { Authorization: auth } : undefined });
+  const resp = await fetchWithTimeoutRetry(url, { method: "GET", headers: auth ? { Authorization: auth } : undefined }, 15000, 1);
   if (!resp.ok) {
     const msg = await resp.text().catch(() => "");
     throw new Error(`NAS 파일 조회 실패 (${resp.status}): ${msg || "요청이 거부되었습니다."}`);
@@ -859,7 +859,202 @@ async function nasFetchBlobUrl(relPath) {
 /** =========================
  *  Thumbnails
  *  ========================= */
-function ensureThumbUrl(sample, role) {
+
+const THUMB_MAX_CONCURRENCY = 4;
+const THUMB_RENDER_DEBOUNCE_MS = 120;
+
+let _renderTimer = null;
+function scheduleRender() {
+  if (_renderTimer) return;
+  _renderTimer = setTimeout(() => {
+    _renderTimer = null;
+    render();
+  }, THUMB_RENDER_DEBOUNCE_MS);
+}
+
+function cleanupThumbBlobs(samples) {
+  try {
+    for (const s of samples || []) {
+      const blobs = s?._thumbBlobUrl;
+      if (!blobs) continue;
+      for (const k of Object.keys(blobs)) {
+        const u = blobs[k];
+        if (typeof u === "string" && u.startsWith("blob:")) {
+          try {
+            URL.revokeObjectURL(u);
+          } catch {}
+        }
+      }
+      s._thumbBlobUrl = {};
+    }
+  } catch {}
+}
+
+function _setThumbUrl(sample, role, url, expMs) {
+  sample._thumbUrl ||= {};
+  sample._thumbExp ||= {};
+  sample._thumbBlobUrl ||= {};
+
+  const prevBlob = sample._thumbBlobUrl[role];
+  if (prevBlob && prevBlob !== url && typeof prevBlob === "string" && prevBlob.startsWith("blob:")) {
+    try {
+      URL.revokeObjectURL(prevBlob);
+    } catch {}
+  }
+
+  sample._thumbUrl[role] = url;
+  if (typeof expMs === "number") sample._thumbExp[role] = expMs;
+
+  if (typeof url === "string" && url.startsWith("blob:")) {
+    sample._thumbBlobUrl[role] = url;
+  } else {
+    delete sample._thumbBlobUrl[role];
+  }
+}
+
+// 네트워크 없는(저렴한) 썸네일 프리셋: http / nas public만 세팅
+function primeThumbUrl(sample, role) {
+  const path = sample._photoPath?.[role];
+  if (!path) return;
+
+  if (isHttpUrl(path)) {
+    _setThumbUrl(sample, role, path, Date.now() + 365 * 24 * 3600 * 1000);
+    return;
+  }
+
+  if (typeof path === "string" && path.startsWith("nas:") && NAS_FILE_BASE) {
+    const rel = path.slice(4).replace(/^\//, "");
+    _setThumbUrl(sample, role, joinUrl(NAS_FILE_BASE, rel), Date.now() + 365 * 24 * 3600 * 1000);
+  }
+}
+
+function updateThumbInDom(sampleId, role, url) {
+  try {
+    const sel = `.thumbMini[data-sid="${sampleId}"][data-role="${role}"]`;
+    const wrap = document.querySelector(sel);
+    if (!wrap) return false;
+
+    // placeholder -> img
+    const existing = wrap.querySelector("img");
+    if (existing) {
+      existing.src = url;
+      return true;
+    }
+
+    wrap.innerHTML = "";
+    const dateISO = wrap.getAttribute("data-date") || state.activeDate;
+    wrap.appendChild(
+      el("img", {
+        src: url,
+        alt: roleLabel(role),
+        onclick: () => openViewerAt(dateISO, sampleId, role),
+      })
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function fetchWithTimeoutRetry(url, init, timeoutMs = 15000, retries = 1) {
+  let lastErr;
+  const tries = Math.max(1, (retries ?? 0) + 1);
+
+  for (let i = 0; i < tries; i++) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const resp = await fetch(url, { ...(init || {}), signal: ctrl.signal });
+      clearTimeout(t);
+      return resp;
+    } catch (e) {
+      clearTimeout(t);
+      lastErr = e;
+      // 타임아웃/네트워크 흔들림 대응: 짧게 텀
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
+  throw lastErr;
+}
+
+let _thumbQueue = [];
+let _thumbRunning = 0;
+
+function _getSampleById(id) {
+  if (state.sampleById && typeof state.sampleById.get === "function") {
+    const v = state.sampleById.get(id);
+    if (v) return v;
+  }
+  // fallback
+  for (const arr of state.samplesByDate?.values?.() || []) {
+    for (const s of arr || []) if (s?.id === id) return s;
+  }
+  return null;
+}
+
+function queueThumb(sampleId, role, opts) {
+  const s = _getSampleById(sampleId);
+  if (!s) return;
+
+  s._thumbQueued ||= {};
+  if (s._thumbLoading?.[role] || s._thumbQueued[role]) return;
+  s._thumbQueued[role] = true;
+
+  _thumbQueue.push({ sampleId, role, opts: opts || {} });
+  pumpThumbQueue();
+}
+
+function pumpThumbQueue() {
+  while (_thumbRunning < THUMB_MAX_CONCURRENCY && _thumbQueue.length) {
+    const task = _thumbQueue.shift();
+    _thumbRunning += 1;
+
+    (async () => {
+      try {
+        const s = _getSampleById(task.sampleId);
+        if (s) await ensureThumbUrl(s, task.role, task.opts);
+      } catch (e) {
+        console.warn("썸네일 로딩 실패:", e);
+      } finally {
+        const s = _getSampleById(task.sampleId);
+        if (s && s._thumbQueued) s._thumbQueued[task.role] = false;
+        _thumbRunning -= 1;
+        pumpThumbQueue();
+      }
+    })();
+  }
+}
+
+let _thumbObserver = null;
+function observeThumb(elm, sampleId, role) {
+  try {
+    if (typeof IntersectionObserver === "undefined") {
+      queueThumb(sampleId, role);
+      return;
+    }
+    if (!_thumbObserver) {
+      _thumbObserver = new IntersectionObserver(
+        (entries) => {
+          for (const ent of entries) {
+            if (!ent.isIntersecting) continue;
+            const el = ent.target;
+            _thumbObserver.unobserve(el);
+
+            const sid = el.getAttribute("data-sid");
+            const r = el.getAttribute("data-role");
+            if (sid && r) queueThumb(sid, r);
+          }
+        },
+        { root: null, threshold: 0.05 }
+      );
+    }
+    _thumbObserver.observe(elm);
+  } catch {
+    queueThumb(sampleId, role);
+  }
+}
+
+async function ensureThumbUrl(sample, role, opts) {
   const path = sample._photoPath?.[role];
   if (!path) return;
 
@@ -867,69 +1062,51 @@ function ensureThumbUrl(sample, role) {
   sample._thumbExp ||= {};
   sample._thumbLoading ||= {};
 
-  // full URL이면 그대로
-  if (isHttpUrl(path)) {
-    sample._thumbUrl[role] = path;
-    sample._thumbExp[role] = Date.now() + 365 * 24 * 3600 * 1000;
-    return;
-  }
-
-  // nas: 접두
-  if (typeof path === "string" && path.startsWith("nas:")) {
-    const rel = path.slice(4).replace(/^\//, "");
-
-    const now = Date.now();
-    const exp = sample._thumbExp[role] || 0;
-    if (sample._thumbUrl[role] && exp > now + 15_000) return;
-
-    if (sample._thumbLoading[role]) return;
-    sample._thumbLoading[role] = true;
-
-    (async () => {
-      try {
-        // 1) public URL로 먼저 세팅 (NAS가 public 허용이면 이걸로 끝)
-        if (NAS_FILE_BASE) {
-          sample._thumbUrl[role] = joinUrl(NAS_FILE_BASE, rel);
-          sample._thumbExp[role] = Date.now() + 365 * 24 * 3600 * 1000;
-        }
-
-        // 2) public이 막혀있으면 img는 깨짐 → Authorization으로 blob URL 생성해서 교체
-        const auth = await getNasAuthorization();
-        if (auth) {
-          const blobUrl = await nasFetchBlobUrl(rel);
-          sample._thumbUrl[role] = blobUrl;
-          sample._thumbExp[role] = Date.now() + 365 * 24 * 3600 * 1000;
-        }
-      } catch (e) {
-        console.warn("NAS 썸네일 생성 실패:", e);
-      } finally {
-        sample._thumbLoading[role] = false;
-        render();
-      }
-    })();
-
-    return;
-  }
-
   const now = Date.now();
   const exp = sample._thumbExp[role] || 0;
-  if (sample._thumbUrl[role] && exp > now + 15_000) return;
+  if (sample._thumbUrl[role] && exp > now + 15_000 && !opts?.force) return;
 
   if (sample._thumbLoading[role]) return;
   sample._thumbLoading[role] = true;
 
-  (async () => {
-    try {
-      const url = await getSignedUrl(path);
-      sample._thumbUrl[role] = url;
-      sample._thumbExp[role] = Date.now() + SIGNED_URL_TTL_SEC * 1000;
-    } catch (e) {
-      console.error("Signed URL 생성 실패:", e);
-    } finally {
-      sample._thumbLoading[role] = false;
-      render();
+  try {
+    // full URL이면 그대로
+    if (isHttpUrl(path)) {
+      _setThumbUrl(sample, role, path, Date.now() + 365 * 24 * 3600 * 1000);
+      updateThumbInDom(sample.id, role, path);
+      return;
     }
-  })();
+
+    // nas: 접두 (기본은 public URL만, 실패 시 onerror에서 force blob)
+    if (typeof path === "string" && path.startsWith("nas:")) {
+      const rel = path.slice(4).replace(/^\//, "");
+
+      if (NAS_FILE_BASE) {
+        const pub = joinUrl(NAS_FILE_BASE, rel);
+        _setThumbUrl(sample, role, pub, Date.now() + 365 * 24 * 3600 * 1000);
+        updateThumbInDom(sample.id, role, pub);
+      }
+
+      if (!opts?.nasForceBlob) return;
+
+      const auth = await getNasAuthorization();
+      if (auth) {
+        const blobUrl = await nasFetchBlobUrl(rel);
+        _setThumbUrl(sample, role, blobUrl, Date.now() + 365 * 24 * 3600 * 1000);
+        if (!updateThumbInDom(sample.id, role, blobUrl)) scheduleRender();
+      }
+      return;
+    }
+
+    // Supabase Storage signed URL
+    const url = await getSignedUrl(path);
+    _setThumbUrl(sample, role, url, Date.now() + SIGNED_URL_TTL_SEC * 1000);
+    if (!updateThumbInDom(sample.id, role, url)) scheduleRender();
+  } catch (e) {
+    console.error("썸네일 생성 실패:", e);
+  } finally {
+    sample._thumbLoading[role] = false;
+  }
 }
 
 /** =========================
@@ -1081,6 +1258,10 @@ async function deleteJobAndRelated(job) {
 
     // 1) load samples
     const samples = await fetchSamples(job.id);
+
+  state.sampleById = new Map((samples || []).map((s) => [s.id, s]));
+
+  state.sampleById = new Map((samples || []).map((s) => [s.id, s]));
     const sampleIds = (samples || []).map((s) => s.id);
 
     // 2) photos
@@ -1151,6 +1332,9 @@ async function loadJobs() {
 }
 
 async function loadJob(job) {
+  // 기존 현장 썸네일 blob 정리(메모리 누수 방지)
+  cleanupThumbBlobs(Array.from(state.sampleById?.values?.() || []));
+
   state.job = job;
   state.samplesByDate = new Map();
   state.dates = [];
@@ -1192,7 +1376,7 @@ async function loadJob(job) {
 
     s._photoState[role] = p.state === "failed" ? "failed" : "done";
     s._photoPath[role] = p.storage_path;
-    ensureThumbUrl(s, role);
+    primeThumbUrl(s, role);
   }
 
   // 날짜가 없으면 오늘을 탭으로 만들어서 추가 UX
@@ -1672,19 +1856,33 @@ function renderJobWork() {
       const status = s._photoState?.[role] || "";
       const dot = el("div", { class: dotClass(status) });
 
-      const thumb = el("div", { class: "thumbMini", title: roleLabel(role) });
+      const thumb = el("div", {
+        class: "thumbMini",
+        title: roleLabel(role),
+        "data-sid": s.id,
+        "data-role": role,
+        "data-date": dateISO,
+      });
+
       const url = s._thumbUrl?.[role];
       if (url) {
-        thumb.appendChild(
-          el("img", {
-            src: url,
-            alt: roleLabel(role),
-            onclick: () => openViewerAt(dateISO, s.id, role),
-          })
-        );
+        const img = el("img", {
+          src: url,
+          alt: roleLabel(role),
+          onclick: () => openViewerAt(dateISO, s.id, role),
+          onerror: () => {
+            // NAS public이 막혀있을 때만 blob fallback
+            const p = s._photoPath?.[role];
+            if (typeof p === "string" && p.startsWith("nas:")) {
+              queueThumb(s.id, role, { nasForceBlob: true, force: true });
+            }
+          },
+        });
+        thumb.appendChild(img);
       } else {
         thumb.appendChild(el("div", { text: roleLabel(role) }));
-        ensureThumbUrl(s, role);
+        // 화면에 들어온 썸네일부터만 로딩(요청 폭탄 방지)
+        if (s._photoPath?.[role]) observeThumb(thumb, s.id, role);
       }
 
       const btns = el("div", { class: "slotBtns" }, [
