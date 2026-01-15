@@ -237,6 +237,7 @@ const state = {
     index: 0,
     zoom: 1,
     reqId: 0,
+    objectUrl: null,
   },
 };
 
@@ -411,10 +412,8 @@ function viewerRoleOrder(sample) {
   // 썸네일 role 값이 start/end/measurement/single 등으로 들어올 수 있어서
   // 모드별로 유연하게 처리한다.
   if (state.mode === "density") {
-    // 농도는 단일 사진인데 role이 measurement 또는 single로 저장될 수 있음
-    const keys = Object.keys(sample?._photoPath || {});
-    if (keys.length) return keys;
-    return ["measurement", "single"];
+    // 농도는 사진 1장만: UI/뷰어에서는 항상 measurement 슬롯만 사용
+    return ["measurement"];
   }
   // 비산은 기본 start/end + 단일/추가 사진 대응
   return ["start", "end", "single"];
@@ -445,18 +444,54 @@ function buildViewerItemsForDate(dateISO) {
 async function resolvePhotoUrl(storagePath, sample, role) {
   if (!storagePath) return "";
 
-  // 1) full URL already
-  if (isHttpUrl(storagePath)) return storagePath;
+  const sp = String(storagePath);
 
-  // 2) NAS relative (optional): "nas:..."
-  if (typeof storagePath === "string" && storagePath.startsWith("nas:")) {
-    const rel = storagePath.slice(4).replace(/^\//, "");
-    if (!NAS_FILE_BASE) throw new Error("NAS 파일 경로 설정이 되어 있지 않습니다. (NAS_FILE_BASE)");
-    return joinUrl(NAS_FILE_BASE, rel);
+  // 1) full URL already
+  if (isHttpUrl(sp)) {
+    // NAS public URL 형태인데 권한이 필요한 경우가 있어, 가능하면 blob URL로 변환
+    try {
+      if (NAS_FILE_BASE && sp.startsWith(NAS_FILE_BASE) && NAS_GATEWAY_URL) {
+        const rel = sp.slice(NAS_FILE_BASE.length).replace(/^\/+/, "");
+        const auth = await getNasAuthorization();
+        if (auth) {
+          try {
+            return await nasFetchBlobUrl(rel);
+          } catch {
+            // fallback to given URL
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return sp;
+  }
+
+  // 2) NAS relative: "nas:..."
+  if (sp.startsWith("nas:")) {
+    const rel = sp.slice(4).replace(/^\/+/, "");
+
+    // public URL (가능하면)
+    const publicUrl = NAS_FILE_BASE ? joinUrl(NAS_FILE_BASE, rel) : "";
+
+    // 권한이 필요한 NAS면 blob URL로 변환 (img 태그는 헤더를 못 붙임)
+    if (NAS_GATEWAY_URL) {
+      const auth = await getNasAuthorization();
+      if (auth) {
+        try {
+          return await nasFetchBlobUrl(rel);
+        } catch {
+          // blob 실패 시 public로 fallback
+        }
+      }
+    }
+
+    if (publicUrl) return publicUrl;
+    throw new Error("NAS 파일 경로 설정이 되어 있지 않습니다. (NAS_FILE_BASE 또는 NAS_GATEWAY_URL)");
   }
 
   // 3) Supabase Storage path
-  return await getSignedUrl(storagePath);
+  return await getSignedUrl(sp);
 }
 
 function openViewerAt(dateISO, targetSampleId, targetRole) {
@@ -481,6 +516,7 @@ function closeViewer() {
   state.viewer.items = [];
   state.viewer.index = 0;
   state.viewer.zoom = 1;
+  if (state.viewer.objectUrl) { try { URL.revokeObjectURL(state.viewer.objectUrl); } catch {} state.viewer.objectUrl = null; }
   if (viewerModal) viewerModal.hidden = true;
 }
 
@@ -509,9 +545,15 @@ async function renderViewer() {
     // 다른 사진으로 넘어간 뒤 늦게 응답이 오면 무시
     if (myReq !== state.viewer.reqId) return;
 
+    // 이전 blob URL 정리(메모리 누수 방지)
+    if (state.viewer.objectUrl) { try { URL.revokeObjectURL(state.viewer.objectUrl); } catch {} state.viewer.objectUrl = null; }
+
     // iOS/Safari에서 간헐적으로 갱신이 안 되는 케이스 방지
     viewerImg.removeAttribute("src");
     viewerImg.src = url;
+
+    // blob URL이면 추적해서 close/전환 시 revoke
+    if (typeof url === "string" && url.startsWith("blob:")) state.viewer.objectUrl = url;
 
     // 로딩 실패 시 사용자 피드백
     viewerImg.onerror = () => {
@@ -1000,33 +1042,7 @@ async function deleteSample(sample) {
   try {
     setFoot("삭제를 진행 중입니다...");
 
-    // 0) 사진 파일(=NAS/스토리지) 먼저 best-effort로 삭제 준비
-    let prePhotos = [];
-    try {
-      prePhotos = await fetchPhotosForSamples([sample.id]);
-    } catch {
-      prePhotos = [];
-    }
-
-    if (prePhotos && prePhotos.length) {
-      // NAS delete best-effort
-      for (const p of prePhotos) {
-        if (!p.storage_path) continue;
-        if (isHttpUrl(p.storage_path) || String(p.storage_path || "").startsWith("nas:")) {
-          await nasDeleteByPathOrUrl(p.storage_path);
-        }
-      }
-
-      // Supabase Storage remove best-effort (only if relative path)
-      const sbPaths = (prePhotos || [])
-        .map((p) => p.storage_path)
-        .filter((p) => p && !isHttpUrl(p) && !String(p).startsWith("nas:"));
-      if (sbPaths.length) {
-        await supabase.storage.from(BUCKET).remove(sbPaths).catch(() => null);
-      }
-    }
-
-    // 1) server RPC (preferred)
+    // server RPC (preferred)
     try {
       const { error } = await supabase.rpc(RPC_DELETE_SAMPLE_AND_RENUMBER, { p_sample_id: sample.id });
       if (error) throw error;
@@ -1034,20 +1050,14 @@ async function deleteSample(sample) {
       console.warn("delete_sample_and_renumber RPC 실패 (fallback):", e);
 
       // fallback: delete photo rows, sample row, then renumber
-      // (prePhotos가 비어있을 때만 여기서 파일 삭제까지 수행)
-      if (!prePhotos || prePhotos.length === 0) {
-        const photos = await fetchPhotosForSamples([sample.id]);
-        for (const p of photos) {
-          if (isHttpUrl(p.storage_path) || String(p.storage_path || "").startsWith("nas:")) {
-            await nasDeleteByPathOrUrl(p.storage_path);
-          }
-          // Supabase Storage remove best-effort (only if relative path)
-          if (p.storage_path && !isHttpUrl(p.storage_path) && !String(p.storage_path).startsWith("nas:")) {
-            await supabase.storage.from(BUCKET).remove([p.storage_path]).catch(() => null);
-          }
+      const photos = await fetchPhotosForSamples([sample.id]);
+      for (const p of photos) {
+        if (isHttpUrl(p.storage_path) || String(p.storage_path || "").startsWith("nas:")) await nasDeleteByPathOrUrl(p.storage_path);
+        // Supabase Storage remove best-effort (only if relative path)
+        if (p.storage_path && !isHttpUrl(p.storage_path) && !String(p.storage_path).startsWith("nas:")) {
+          await supabase.storage.from(BUCKET).remove([p.storage_path]).catch(() => null);
         }
       }
-
       await supabase.from(T_PHOTOS).delete().eq("sample_id", sample.id);
       await supabase.from(T_SAMPLES).delete().eq("id", sample.id);
       await renumberSamplesForDate(state.job.id, sample.measurement_date);
@@ -1172,9 +1182,17 @@ async function loadJob(job) {
   for (const p of photos) {
     const s = byId.get(p.sample_id);
     if (!s) continue;
-    s._photoState[p.role] = p.state === "failed" ? "failed" : "done";
-    s._photoPath[p.role] = p.storage_path;
-    ensureThumbUrl(s, p.role);
+
+    // 농도는 UI에서 사진 1장만 쓰므로, 과거 데이터의 role=single 은 measurement 로 정규화한다.
+    const rawRole = p.role;
+    const role = (state.mode === "density" && rawRole === "single") ? "measurement" : rawRole;
+
+    // 이미 measurement 가 있으면 single 은 무시(중복 슬롯 방지)
+    if (state.mode === "density" && rawRole === "single" && s._photoPath["measurement"]) continue;
+
+    s._photoState[role] = p.state === "failed" ? "failed" : "done";
+    s._photoPath[role] = p.storage_path;
+    ensureThumbUrl(s, role);
   }
 
   // 날짜가 없으면 오늘을 탭으로 만들어서 추가 UX
