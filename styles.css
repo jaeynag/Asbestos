@@ -481,8 +481,13 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   background:#fff;
   border-radius:16px;
   padding:16px;
-  text-align:left;
+  text-align:center;
   cursor:pointer;
+display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  min-height:84px;
 }
 .choiceCard:active{ filter:brightness(0.97); }
 .choiceTitle{ font-size:18px; font-weight:900; }
@@ -519,5 +524,14 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   z-index:1;
   touch-action: pan-y;
   transform: translateX(0px);
+  background:#fff;
+  border-radius:12px;
+  overflow:hidden;
 }
 .swipeRow.dragging .swipeContent{ transition:none !important; }
+
+
+/* 섹션 라벨 아래 여백 */
+.sectionLabel{ display:block; margin-bottom:10px; }
+
+.choiceSub{ display:none !important; }
