@@ -415,8 +415,8 @@ function viewerRoleOrder(sample) {
     // 농도는 사진 1장만: UI/뷰어에서는 항상 measurement 슬롯만 사용
     return ["measurement"];
   }
-  // 비산은 기본 start/end + 단일/추가 사진 대응
-  return ["start", "end", "single"];
+  // 비산은 전/후(시작/완료)만 사용
+  return ["start", "end"];
 }
 function buildViewerItemsForDate(dateISO) {
   const samples = state.samplesByDate.get(dateISO) || [];
