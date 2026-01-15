@@ -237,6 +237,7 @@ const state = {
     index: 0,
     zoom: 1,
     reqId: 0,
+    objectUrl: null,
   },
 };
 
@@ -445,18 +446,54 @@ function buildViewerItemsForDate(dateISO) {
 async function resolvePhotoUrl(storagePath, sample, role) {
   if (!storagePath) return "";
 
-  // 1) full URL already
-  if (isHttpUrl(storagePath)) return storagePath;
+  const sp = String(storagePath);
 
-  // 2) NAS relative (optional): "nas:..."
-  if (typeof storagePath === "string" && storagePath.startsWith("nas:")) {
-    const rel = storagePath.slice(4).replace(/^\//, "");
-    if (!NAS_FILE_BASE) throw new Error("NAS 파일 경로 설정이 되어 있지 않습니다. (NAS_FILE_BASE)");
-    return joinUrl(NAS_FILE_BASE, rel);
+  // 1) full URL already
+  if (isHttpUrl(sp)) {
+    // NAS public URL 형태인데 권한이 필요한 경우가 있어, 가능하면 blob URL로 변환
+    try {
+      if (NAS_FILE_BASE && sp.startsWith(NAS_FILE_BASE) && NAS_GATEWAY_URL) {
+        const rel = sp.slice(NAS_FILE_BASE.length).replace(/^\/+/, "");
+        const auth = await getNasAuthorization();
+        if (auth) {
+          try {
+            return await nasFetchBlobUrl(rel);
+          } catch {
+            // fallback to given URL
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return sp;
+  }
+
+  // 2) NAS relative: "nas:..."
+  if (sp.startsWith("nas:")) {
+    const rel = sp.slice(4).replace(/^\/+/, "");
+
+    // public URL (가능하면)
+    const publicUrl = NAS_FILE_BASE ? joinUrl(NAS_FILE_BASE, rel) : "";
+
+    // 권한이 필요한 NAS면 blob URL로 변환 (img 태그는 헤더를 못 붙임)
+    if (NAS_GATEWAY_URL) {
+      const auth = await getNasAuthorization();
+      if (auth) {
+        try {
+          return await nasFetchBlobUrl(rel);
+        } catch {
+          // blob 실패 시 public로 fallback
+        }
+      }
+    }
+
+    if (publicUrl) return publicUrl;
+    throw new Error("NAS 파일 경로 설정이 되어 있지 않습니다. (NAS_FILE_BASE 또는 NAS_GATEWAY_URL)");
   }
 
   // 3) Supabase Storage path
-  return await getSignedUrl(storagePath);
+  return await getSignedUrl(sp);
 }
 
 function openViewerAt(dateISO, targetSampleId, targetRole) {
@@ -481,6 +518,7 @@ function closeViewer() {
   state.viewer.items = [];
   state.viewer.index = 0;
   state.viewer.zoom = 1;
+  if (state.viewer.objectUrl) { try { URL.revokeObjectURL(state.viewer.objectUrl); } catch {} state.viewer.objectUrl = null; }
   if (viewerModal) viewerModal.hidden = true;
 }
 
@@ -509,9 +547,15 @@ async function renderViewer() {
     // 다른 사진으로 넘어간 뒤 늦게 응답이 오면 무시
     if (myReq !== state.viewer.reqId) return;
 
+    // 이전 blob URL 정리(메모리 누수 방지)
+    if (state.viewer.objectUrl) { try { URL.revokeObjectURL(state.viewer.objectUrl); } catch {} state.viewer.objectUrl = null; }
+
     // iOS/Safari에서 간헐적으로 갱신이 안 되는 케이스 방지
     viewerImg.removeAttribute("src");
     viewerImg.src = url;
+
+    // blob URL이면 추적해서 close/전환 시 revoke
+    if (typeof url === "string" && url.startsWith("blob:")) state.viewer.objectUrl = url;
 
     // 로딩 실패 시 사용자 피드백
     viewerImg.onerror = () => {
