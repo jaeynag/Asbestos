@@ -247,6 +247,7 @@ const state = {
 const root = document.getElementById("root");
 const btnBack = document.getElementById("btnBack");
 const btnGear = document.getElementById("btnGear");
+const appTitleEl = document.querySelector(".topbar .h1");
 const settingsMenu = document.getElementById("settingsMenu");
 const menuChangeMode = document.getElementById("menuChangeMode");
 const menuChangeCompany = document.getElementById("menuChangeCompany");
@@ -296,6 +297,14 @@ function updateHeader() {
 
   if (menuChangeMode) menuChangeMode.disabled = !state.mode;
   if (menuChangeCompany) menuChangeCompany.disabled = !state.company;
+
+  // Title
+  const baseTitle = "Asbestos field photos";
+  let title = baseTitle;
+  if (state.user && state.company) title = safeText(state.company?.name, baseTitle);
+  if (appTitleEl) appTitleEl.textContent = title;
+  try { document.title = title; } catch {}
+
 }
 
 function goBack() {
@@ -1528,6 +1537,113 @@ function renderAuth() {
   root.appendChild(card);
 }
 
+
+/** ===== Swipe (left to delete) ===== */
+function createSwipeRow({ content, onDelete, onOpen, deleteText = "삭제", ignoreInteractive = true }) {
+  const wrap = el("div", { class: "swipeRow" });
+  const actions = el("div", { class: "swipeActions" }, [
+    el("button", {
+      class: "swipeDeleteBtn",
+      text: deleteText,
+      onclick: (ev) => {
+        ev.stopPropagation();
+        if (typeof onDelete === "function") onDelete();
+      },
+      type: "button",
+    }),
+  ]);
+
+  const contentWrap = el("div", { class: "swipeContent" }, [content]);
+
+  wrap.appendChild(actions);
+  wrap.appendChild(contentWrap);
+
+  const OPEN_X = -92;
+  const THRESH_OPEN = OPEN_X / 2; // -46
+  let isOpen = false;
+  let dragging = false;
+  let startX = 0;
+  let startY = 0;
+  let baseX = 0;
+  let lastX = 0;
+  let justDragged = false;
+
+  function applyX(x) {
+    lastX = x;
+    contentWrap.style.transform = `translateX(${x}px)`;
+    contentWrap.dataset.x = String(x);
+  }
+  function setOpen(v) {
+    isOpen = !!v;
+    wrap.classList.toggle("open", isOpen);
+    contentWrap.style.transition = "transform .15s ease";
+    applyX(isOpen ? OPEN_X : 0);
+    setTimeout(() => { contentWrap.style.transition = ""; }, 180);
+  }
+
+  // click behavior: open action -> close, else onOpen
+  contentWrap.addEventListener("click", (ev) => {
+    if (justDragged) return;
+    if (isOpen) {
+      ev.stopPropagation();
+      setOpen(false);
+      return;
+    }
+    if (typeof onOpen === "function") onOpen(ev);
+  });
+
+  contentWrap.addEventListener("pointerdown", (ev) => {
+    if (ignoreInteractive) {
+      const t = ev.target;
+      if (t && t.closest && t.closest("button,input,select,textarea,a,label")) return;
+    }
+    startX = ev.clientX;
+    startY = ev.clientY;
+    baseX = isOpen ? OPEN_X : 0;
+    dragging = false;
+    justDragged = false;
+    contentWrap.setPointerCapture(ev.pointerId);
+  });
+
+  contentWrap.addEventListener("pointermove", (ev) => {
+    const dx = ev.clientX - startX;
+    const dy = ev.clientY - startY;
+
+    if (!dragging) {
+      if (Math.abs(dx) < 7) return;
+      if (Math.abs(dx) <= Math.abs(dy) + 2) return; // keep scroll
+      dragging = true;
+      wrap.classList.add("dragging");
+      contentWrap.style.transition = "none";
+    }
+
+    // dragging
+    let x = baseX + dx;
+    if (x > 0) x = 0;
+    if (x < OPEN_X) x = OPEN_X;
+    applyX(x);
+    if (ev.cancelable) ev.preventDefault();
+    ev.stopPropagation();
+  });
+
+  function endDrag() {
+    if (!dragging) return;
+    dragging = false;
+    wrap.classList.remove("dragging");
+    justDragged = true;
+    setTimeout(() => { justDragged = false; }, 0);
+
+    contentWrap.style.transition = "";
+    setOpen(lastX < THRESH_OPEN);
+  }
+
+  contentWrap.addEventListener("pointerup", endDrag);
+  contentWrap.addEventListener("pointercancel", endDrag);
+
+  return wrap;
+}
+
+
 /** ===== Company ===== */
 function renderCompanySelect() {
   const list = el("div", { class: "list" });
@@ -1536,29 +1652,28 @@ function renderCompanySelect() {
     list.appendChild(el("div", { class: "card", text: "회사 목록이 비어 있습니다." }));
   } else {
     for (const c of state.companies) {
-      list.appendChild(
-        el("div", { class: "item" }, [
-          el("div", {}, [
-            el("div", { class: "item-title", text: c.name }),
-          ]),
-          el("button", {
-            class: "btn primary",
-            text: "선택",
-            onclick: async () => {
-              state.company = c;
-              state.mode = null;
-              state.job = null;
-              await loadJobs().catch(() => null);
-              render();
-            },
-          }),
-        ])
-      );
+      const item = el("div", {
+        class: "item clickable",
+        onclick: async () => {
+          state.company = c;
+          state.mode = null;
+          state.job = null;
+          await loadJobs().catch(() => null);
+          render();
+        },
+      }, [
+        el("div", {}, [
+          el("div", { class: "item-title", text: c.name }),
+        ]),
+        el("div", { class: "chev", text: "›" }),
+      ]);
+
+      list.appendChild(item);
     }
   }
 
   root.appendChild(el("div", { class: "card" }, [
-    el("div", { class: "label", text: "회사 선택" }),
+    el("div", { class: "label", text: "회사 목록" }),
     list,
   ]));
 }
@@ -1566,28 +1681,34 @@ function renderCompanySelect() {
 /** ===== Mode ===== */
 function renderModeSelect() {
   const wrap = el("div", { class: "card" }, [
-    el("div", { class: "label", text: `업무 선택 · ${state.company?.name || ""}` }),
-    el("div", { class: "tabs", style: "margin-top:10px;" }, [
+    el("div", { class: "label", text: "업무 선택" }),
+    el("div", { class: "choiceGrid" }, [
       el("button", {
-        class: "tab" + (state.mode === "density" ? " active" : ""),
-        text: "농도",
+        class: "choiceCard",
+        type: "button",
         onclick: async () => {
           state.mode = "density";
           state.job = null;
           await loadJobs();
           render();
         },
-      }),
+      }, [
+        el("div", { class: "choiceTitle", text: "농도" }),
+        el("div", { class: "choiceSub", text: "측정 사진 1장" }),
+      ]),
       el("button", {
-        class: "tab" + (state.mode === "scatter" ? " active" : ""),
-        text: "비산",
+        class: "choiceCard",
+        type: "button",
         onclick: async () => {
           state.mode = "scatter";
           state.job = null;
           await loadJobs();
           render();
         },
-      }),
+      }, [
+        el("div", { class: "choiceTitle", text: "비산" }),
+        el("div", { class: "choiceSub", text: "시작/완료 사진" }),
+      ]),
     ]),
   ]);
 
@@ -1652,25 +1773,21 @@ function renderJobSelect() {
     for (const j of state.jobs) {
       const sub = [safeText(j.address), safeText(j.contractor)].filter(Boolean).join(" · ");
 
+      const content = el("div", { class: "item clickable" }, [
+        el("div", {}, [
+          el("div", { class: "item-title", text: safeText(j.project_name, "(이름없음)") }),
+          el("div", { class: "item-sub", text: sub || `생성: ${String(j.created_at || "").slice(0, 10)}` }),
+        ]),
+        el("div", { class: "chev", text: "›" }),
+      ]);
+
       list.appendChild(
-        el("div", { class: "item" }, [
-          el("div", {}, [
-            el("div", { class: "item-title", text: safeText(j.project_name, "(이름없음)") }),
-            el("div", { class: "item-sub", text: sub || `생성: ${String(j.created_at || "").slice(0, 10)}` }),
-          ]),
-          el("div", { class: "row", style: "gap:8px;" }, [
-            el("button", {
-              class: "btn small",
-              text: "삭제",
-              onclick: () => deleteJobAndRelated(j),
-            }),
-            el("button", {
-              class: "btn primary small",
-              text: "열기",
-              onclick: () => loadJob(j),
-            }),
-          ]),
-        ])
+        createSwipeRow({
+          content,
+          onOpen: () => loadJob(j),
+          onDelete: () => deleteJobAndRelated(j),
+          ignoreInteractive: false,
+        })
       );
     }
   }
@@ -1844,9 +1961,7 @@ function renderJobWork() {
                 setFoot(`저장 실패: ${e?.message || e}`);
               }
             },
-          }),
-          el("button", { class: "btn small", text: "삭제", onclick: () => deleteSample(s) }),
-        ]),
+          }),        ]),
       ]),
     ]);
 
@@ -1899,7 +2014,8 @@ function renderJobWork() {
       );
     }
 
-    root.appendChild(el("div", { class: "sampleRow" }, [left, right]));
+    const content = el("div", { class: "sampleRow" }, [left, right]);
+    root.appendChild(createSwipeRow({ content, onDelete: () => deleteSample(s), ignoreInteractive: true }));
   }
 }
 
