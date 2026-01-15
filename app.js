@@ -1344,7 +1344,7 @@ function renderJobSelect() {
   const list = el("div", { class: "list" });
 
   // add job card
-  const pj = el("input", { class: "input", placeholder: "현장명(프로젝트명)" });
+  const pj = el("input", { class: "input", placeholder: "공사명" });
   const addr = el("input", { class: "input", placeholder: "주소" });
   const cont = el("input", { class: "input", placeholder: "시공사" });
 
@@ -1677,3 +1677,4 @@ function renderJobWork() {
     render();
   }
 })();
+
