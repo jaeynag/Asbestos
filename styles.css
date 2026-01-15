@@ -463,3 +463,61 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   .row.stack-mobile{ flex-direction:column; align-items:stretch; }
   .row.stack-mobile-right{ width:100%; justify-content:space-between; }
 }
+
+
+.item.clickable{ cursor:pointer; }
+.chev{ font-size:22px; color:#999; line-height:1; padding-left:10px; }
+
+
+/* ===== Choice cards (Mode) ===== */
+.choiceGrid{
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap:12px;
+  margin-top:12px;
+}
+.choiceCard{
+  border:1px solid var(--line);
+  background:#fff;
+  border-radius:16px;
+  padding:16px;
+  text-align:left;
+  cursor:pointer;
+}
+.choiceCard:active{ filter:brightness(0.97); }
+.choiceTitle{ font-size:18px; font-weight:900; }
+.choiceSub{ font-size:12px; color:var(--muted); margin-top:6px; }
+@media (max-width: 420px){
+  .choiceGrid{ grid-template-columns: 1fr; }
+}
+
+/* ===== Swipe to delete ===== */
+.swipeRow{
+  position:relative;
+  overflow:hidden;
+  border-radius:12px;
+}
+.swipeActions{
+  position:absolute;
+  inset:0;
+  display:flex;
+  justify-content:flex-end;
+  align-items:stretch;
+  z-index:0;
+}
+.swipeDeleteBtn{
+  width:92px;
+  border:0;
+  background:var(--danger);
+  color:#fff;
+  font-weight:900;
+  font-size:14px;
+  cursor:pointer;
+}
+.swipeContent{
+  position:relative;
+  z-index:1;
+  touch-action: pan-y;
+  transform: translateX(0px);
+}
+.swipeRow.dragging .swipeContent{ transition:none !important; }
