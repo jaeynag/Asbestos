@@ -193,6 +193,26 @@ function isHttpUrl(s) {
   return typeof s === "string" && /^https?:\/\//i.test(s);
 }
 
+function withCacheBust(url, tag) {
+  // 썸네일이 이전 이미지로 남는(브라우저 캐시) 현상 방지용
+  // 서명 URL(token=...)은 임의 파라미터 추가 시 깨질 수 있어 제외
+  try {
+    const u = new URL(url);
+    if (u.searchParams.has("token")) return url;
+
+    // presigned URL 계열은 보수적으로 제외
+    for (const k of u.searchParams.keys()) {
+      if (/^x-amz-/i.test(k) || /^x-goog-/i.test(k)) return url;
+    }
+
+    u.searchParams.set("v", String(tag ?? Date.now()));
+    return u.toString();
+  } catch {
+    const sep = url.includes("?") ? "&" : "?";
+    return `${url}${sep}v=${encodeURIComponent(String(tag ?? Date.now()))}`;
+  }
+}
+
 function joinUrl(base, path) {
   try {
     return new URL(path.replace(/^\//, ""), base.replace(/\/$/, "") + "/").toString();
@@ -1172,8 +1192,9 @@ async function ensureThumbUrl(sample, role, opts) {
   try {
     // full URL이면 그대로
     if (isHttpUrl(path)) {
-      _setThumbUrl(sample, role, path, Date.now() + 365 * 24 * 3600 * 1000);
-      updateThumbInDom(sample.id, role, path);
+      const url = opts?.force ? withCacheBust(path, Date.now()) : path;
+      _setThumbUrl(sample, role, url, Date.now() + 365 * 24 * 3600 * 1000);
+      updateThumbInDom(sample.id, role, url);
       return;
     }
 
@@ -1182,7 +1203,8 @@ async function ensureThumbUrl(sample, role, opts) {
       const rel = path.slice(4).replace(/^\//, "");
 
       if (NAS_FILE_BASE) {
-        const pub = joinUrl(NAS_FILE_BASE, rel);
+        const pub0 = joinUrl(NAS_FILE_BASE, rel);
+        const pub = opts?.force ? withCacheBust(pub0, Date.now()) : pub0;
         _setThumbUrl(sample, role, pub, Date.now() + 365 * 24 * 3600 * 1000);
         updateThumbInDom(sample.id, role, pub);
       }
@@ -1215,6 +1237,8 @@ async function ensureThumbUrl(sample, role, opts) {
 async function uploadAndBindPhoto(sample, role, file) {
   sample._photoState ||= {};
   sample._photoPath ||= {};
+  const prevPath = sample._photoPath[role] || null;
+
   sample._photoState[role] = "uploading";
   render();
 
@@ -1254,7 +1278,26 @@ async function uploadAndBindPhoto(sample, role, file) {
     sample._photoState[role] = "done";
     sample._photoPath[role] = row?.storage_path || storedPath;
 
-    ensureThumbUrl(sample, role);
+    // 썸네일은 브라우저 캐시 때문에 이전 이미지가 남는 경우가 있어 강제 갱신
+    ensureThumbUrl(sample, role, { force: true });
+
+    // 기존 사진은 교체 시 제거 (best-effort)
+    try {
+      const nextPath = sample._photoPath[role] || null;
+      if (prevPath && nextPath && String(prevPath) !== String(nextPath)) {
+        const p = String(prevPath);
+        // NAS(또는 URL) 삭제
+        if (isHttpUrl(p) || p.startsWith("nas:")) {
+          await nasDeleteByPathOrUrl(p);
+        } else {
+          // Supabase Storage 삭제
+          await supabase.storage.from(BUCKET).remove([p]).catch(() => null);
+        }
+      }
+    } catch {
+      // ignore
+    }
+
     setFoot("업로드가 완료되었습니다.");
     render();
   } catch (e) {
