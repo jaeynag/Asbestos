@@ -392,6 +392,9 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   border-top:1px solid var(--line);
 }
 
+/* 모달 하단: 왼쪽 끝에 "사진 저장" 버튼 배치 */
+#modalSave{ margin-right:auto; }
+
 /* 업로드 확인 모달 미리보기 */
 .modal-preview{
   width:100%;
@@ -535,3 +538,7 @@ display:flex;
 .sectionLabel{ display:block; margin-bottom:10px; }
 
 .choiceSub{ display:none !important; }
+
+/* v2: viewer 헤더에 저장버튼 보일 때 간격 안정화 */
+#viewerSave{ }
+
