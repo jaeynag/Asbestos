@@ -259,6 +259,7 @@ const modalTitle = document.getElementById("modalTitle");
 const modalPreview = document.getElementById("modalPreview");
 const modalMeta = document.getElementById("modalMeta");
 const modalClose = document.getElementById("modalClose");
+const modalSave = document.getElementById("modalSave");
 const modalReject = document.getElementById("modalReject");
 const modalAccept = document.getElementById("modalAccept");
 
@@ -268,6 +269,7 @@ const viewerTitle = document.getElementById("viewerTitle");
 const viewerImg = document.getElementById("viewerImg");
 const viewerLabel = document.getElementById("viewerLabel");
 const viewerClose = document.getElementById("viewerClose");
+const viewerSave = document.getElementById("viewerSave");
 const viewerPrev = document.getElementById("viewerPrev");
 const viewerNext = document.getElementById("viewerNext");
 const viewerZoom = document.getElementById("viewerZoom");
@@ -405,7 +407,78 @@ function closeModal() {
   if (modal) modal.hidden = true;
 }
 
+async function saveFileToDevice(file) {
+  if (!file) return;
+
+  // 1) 공유(가능한 기기/브라우저에서는 "사진" 앱으로 보내기 쉬움)
+  try {
+    if (navigator?.share && navigator?.canShare) {
+      const can = navigator.canShare({ files: [file] });
+      if (can) {
+        await navigator.share({ files: [file], title: file.name || "photo" });
+        return;
+      }
+    }
+  } catch {
+    // ignore and fallback
+  }
+
+  // 2) 다운로드(공유 미지원/실패 시)
+  try {
+    const url = URL.createObjectURL(file);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = file.name || "photo.jpg";
+    a.rel = "noopener";
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => {
+      try { URL.revokeObjectURL(url); } catch {}
+    }, 1500);
+    setFoot("사진 저장을 시작했어.");
+  } catch {
+    alert("사진 저장에 실패했어. (브라우저 제한일 수 있어)");
+  }
+}
+
+async function saveUrlToDevice(url, filename = "photo.jpg") {
+  if (!url) return;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    const type = blob.type || "image/jpeg";
+    const ext = type.includes("png") ? "png" : type.includes("webp") ? "webp" : "jpg";
+    const safeName = String(filename || "photo").replace(/[\\/:*?\"<>|]/g, "_");
+    const finalName = safeName.toLowerCase().endsWith(`.${ext}`) ? safeName : `${safeName}.${ext}`;
+    const file = new File([blob], finalName, { type });
+    await saveFileToDevice(file);
+    return;
+  } catch (e) {
+    // CORS/권한 등으로 fetch가 막히는 경우가 있어 폴백 제공
+    try {
+      const a = document.createElement("a");
+      a.href = url;
+      a.rel = "noopener";
+      a.target = "_blank";
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setFoot("브라우저 제한 때문에 새 창으로 열었어. 거기서 저장해줘.");
+    } catch {
+      alert("사진 저장에 실패했어. (브라우저 제한/CORS 가능성)");
+    }
+  }
+}
+
 modalClose?.addEventListener("click", closeModal);
+modalSave?.addEventListener("click", async () => {
+  if (!state.pending?.file) return;
+  await saveFileToDevice(state.pending.file);
+});
 modalReject?.addEventListener("click", closeModal);
 modalAccept?.addEventListener("click", async () => {
   if (!state.pending) return;
@@ -578,6 +651,24 @@ async function renderViewer() {
 }
 
 viewerClose?.addEventListener("click", closeViewer);
+viewerSave?.addEventListener("click", async () => {
+  if (!state.viewer.open || !state.viewer.items.length) return;
+  const item = state.viewer.items[state.viewer.index];
+  if (!item) return;
+
+  // 가능한 경우 현재 표시 중인 URL을 사용(이미 resolve 됨)
+  let url = viewerImg?.getAttribute("src") || "";
+  if (!url) {
+    try {
+      url = await resolvePhotoUrl(item.storage_path, item.sample_id, item.role);
+    } catch {
+      url = "";
+    }
+  }
+
+  const base = `photo_${item.sample_id}_${item.role}`;
+  await saveUrlToDevice(url, base);
+});
 viewerPrev?.addEventListener("click", () => {
   if (!state.viewer.items.length) return;
   state.viewer.index = (state.viewer.index - 1 + state.viewer.items.length) % state.viewer.items.length;
