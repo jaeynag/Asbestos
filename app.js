@@ -203,6 +203,114 @@ function joinUrl(base, path) {
   }
 }
 
+
+
+/** =========================
+ *  Save helpers (사진 저장)
+ *  ========================= */
+function sanitizeFilename(name) {
+  const s = String(name || "").trim();
+  const cleaned = s.replace(/[\\/:*?"<>|]+/g, "_").replace(/\s+/g, "_");
+  return cleaned || `photo_${Date.now()}`;
+}
+
+function extFromUrlMaybe(url) {
+  try {
+    const u = new URL(String(url));
+    const m = u.pathname.match(/\.([a-zA-Z0-9]{2,5})$/);
+    return m ? m[1].toLowerCase() : "";
+  } catch {
+    const m = String(url || "").split("?")[0].match(/\.([a-zA-Z0-9]{2,5})$/);
+    return m ? m[1].toLowerCase() : "";
+  }
+}
+
+function extFromMime(mime) {
+  const m = String(mime || "").toLowerCase();
+  if (m.includes("jpeg")) return "jpg";
+  if (m.includes("jpg")) return "jpg";
+  if (m.includes("png")) return "png";
+  if (m.includes("webp")) return "webp";
+  if (m.includes("heic")) return "heic";
+  return "";
+}
+
+function ensureExt(filename, blobType, urlHint) {
+  const base = sanitizeFilename(filename);
+  if (/\.[a-zA-Z0-9]{2,5}$/.test(base)) return base;
+  const ext = extFromMime(blobType) || extFromUrlMaybe(urlHint) || "jpg";
+  return `${base}.${ext}`;
+}
+
+async function tryWebShare(blob, filename) {
+  try {
+    if (!navigator?.share || !navigator?.canShare) return false;
+    const file = new File([blob], filename, { type: blob.type || "application/octet-stream" });
+    if (!navigator.canShare({ files: [file] })) return false;
+    await navigator.share({ files: [file], title: filename });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function triggerDownloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.rel = "noopener";
+  document.body.appendChild(a);
+
+  // iOS/PWA는 download 속성이 무시되는 경우가 있어서 새 탭 fallback
+  const isIOS = /iPad|iPhone|iPod/i.test(navigator.userAgent || "");
+  try {
+    a.click();
+    if (isIOS) {
+      // 클릭이 무시되면 새 탭으로라도 띄워서 저장/공유 가능하게
+      setTimeout(() => {
+        try { window.open(url, "_blank", "noopener"); } catch {}
+      }, 250);
+    }
+  } finally {
+    a.remove();
+    setTimeout(() => {
+      try { URL.revokeObjectURL(url); } catch {}
+    }, 60_000);
+  }
+}
+
+async function saveBlobToDevice(blob, filename, urlHint="") {
+  const finalName = ensureExt(filename, blob?.type, urlHint);
+  const shared = await tryWebShare(blob, finalName);
+  if (shared) {
+    setFoot("사진 저장/공유 창을 열었습니다.");
+    return;
+  }
+  await triggerDownloadBlob(blob, finalName);
+  setFoot("사진 저장을 요청했습니다.");
+}
+
+// Feature flags
+const FEATURE_SINGLE_PHOTO_SAVE = false; // 한장씩 저장 기능 제거(전체 저장만 사용)
+
+// Mobile UI 정책: 모바일(PWA 포함)에서는 사진 저장 기능(단건/전체)을 노출하지 않음
+// - 웹앱에서 사진앱(갤러리)로의 일괄 저장은 플랫폼 제약이 커서 UX 혼선이 큼
+const DISABLE_PHOTO_SAVE_ON_MOBILE = true;
+function isMobileUI() {
+  if (!DISABLE_PHOTO_SAVE_ON_MOBILE) return false;
+  try {
+    const ua = String(navigator.userAgent || "");
+    const byUA = /Android|iPhone|iPad|iPod/i.test(ua);
+    const byMQ = typeof window !== "undefined" && !!window.matchMedia && window.matchMedia("(max-width: 768px)").matches;
+    const byTouch = typeof navigator !== "undefined" && (navigator.maxTouchPoints || 0) > 1;
+    return byUA || byMQ || byTouch;
+  } catch {
+    return false;
+  }
+}
+
+
 /** =========================
  *  Supabase
  *  ========================= */
@@ -262,16 +370,21 @@ const modalMeta = document.getElementById("modalMeta");
 const modalClose = document.getElementById("modalClose");
 const modalReject = document.getElementById("modalReject");
 const modalAccept = document.getElementById("modalAccept");
+const modalSave = document.getElementById("modalSave");
 
 // viewer
 const viewerModal = document.getElementById("viewerModal");
 const viewerTitle = document.getElementById("viewerTitle");
 const viewerImg = document.getElementById("viewerImg");
 const viewerLabel = document.getElementById("viewerLabel");
+const viewerSave = document.getElementById("viewerSave");
 const viewerClose = document.getElementById("viewerClose");
 const viewerPrev = document.getElementById("viewerPrev");
 const viewerNext = document.getElementById("viewerNext");
 const viewerZoom = document.getElementById("viewerZoom");
+
+// 모바일에서는 사진 저장 UI를 숨기고(기능도 비활성) 혼선 방지
+const HIDE_PHOTO_SAVE_UI = isMobileUI();
 
 /** =========================
  *  Header / menu
@@ -406,6 +519,26 @@ modalAccept?.addEventListener("click", async () => {
   closeModal();
   await uploadAndBindPhoto(sample, role, file);
 });
+
+if (FEATURE_SINGLE_PHOTO_SAVE && !HIDE_PHOTO_SAVE_UI) {
+  modalSave?.addEventListener("click", async () => {
+    try {
+      if (!state.pending?.objectUrl) {
+        setFoot("저장할 사진이 없습니다.");
+        return;
+      }
+      const fileName = state.pending?.file?.name || `photo_${Date.now()}.jpg`;
+      const blob = await fetch(state.pending.objectUrl).then((r) => r.blob());
+      await saveBlobToDevice(blob, fileName, state.pending.objectUrl);
+    } catch (e) {
+      console.error(e);
+      setFoot(`사진 저장 실패: ${e?.message || e}`);
+    }
+  });
+} else {
+  try { if (modalSave) modalSave.style.display = "none"; } catch {}
+}
+
 
 /** =========================
  *  Viewer
@@ -585,6 +718,69 @@ viewerZoom?.addEventListener("click", () => {
   state.viewer.zoom = state.viewer.zoom === 1 ? 2 : 1;
   renderViewer();
 });
+
+if (FEATURE_SINGLE_PHOTO_SAVE && !HIDE_PHOTO_SAVE_UI) {
+  viewerSave?.addEventListener("click", async () => {
+    try {
+      if (!state.viewer.open) {
+        setFoot("저장할 사진이 없습니다.");
+        return;
+      }
+      const item = state.viewer.items[state.viewer.index];
+      if (!item) {
+        setFoot("저장할 사진이 없습니다.");
+        return;
+      }
+
+      const labelPart = sanitizeFilename(`${ymdDots(state.activeDate)}_P${item.p_index || ""}_${item.role}`);
+      const baseName = labelPart || `photo_${Date.now()}`;
+
+      let blob = null;
+      const sp = String(item.storage_path || "");
+
+      // NAS 경로면 인증 포함으로 blob 조회 (CORS/권한 이슈 회피)
+      if (sp.startsWith("nas:")) {
+        const rel = sp.slice(4).replace(/^\/+/, "");
+        blob = await nasFetchBlob(rel);
+        await saveBlobToDevice(blob, baseName, sp);
+        return;
+      }
+
+      // 이미 blob URL로 뷰잉 중이면 그걸로 저장
+      const src = String(viewerImg?.src || "");
+      if (src.startsWith("blob:")) {
+        blob = await fetch(src).then((r) => r.blob());
+        await saveBlobToDevice(blob, baseName, src);
+        return;
+      }
+
+      // 일반 URL (Supabase signed url 포함)
+      try {
+        blob = await fetch(src, { method: "GET" }).then((r) => {
+          if (!r.ok) throw new Error(`다운로드 실패 (${r.status})`);
+          return r.blob();
+        });
+        await saveBlobToDevice(blob, baseName, src);
+        return;
+      } catch (e) {
+        // NAS public URL인데 CORS/권한 때문에 실패하면 authenticated endpoint로 재시도
+        if (isHttpUrl(sp) && NAS_FILE_BASE && sp.startsWith(NAS_FILE_BASE) && NAS_GATEWAY_URL) {
+          const rel = sp.slice(NAS_FILE_BASE.length).replace(/^\/+/, "");
+          blob = await nasFetchBlob(rel);
+          await saveBlobToDevice(blob, baseName, sp);
+          return;
+        }
+        throw e;
+      }
+    } catch (e) {
+      console.error(e);
+      setFoot(`사진 저장 실패: ${e?.message || e}`);
+    }
+  });
+} else {
+  try { if (viewerSave) viewerSave.style.display = 'none'; } catch {}
+}
+
 
 /** =========================
  *  API
@@ -857,6 +1053,157 @@ async function nasFetchBlobUrl(relPath) {
   const blob = await resp.blob();
   return URL.createObjectURL(blob);
 }
+
+// nasFetchBlob: 저장/다운로드용 (blob 그대로 반환)
+async function nasFetchBlob(relPath) {
+  if (!NAS_GATEWAY_URL) throw new Error("NAS_GATEWAY_URL이 설정되지 않았습니다.");
+  const rel = String(relPath || "").replace(/^\/+/, "");
+  const enc = rel.split("/").map(encodeURIComponent).join("/");
+  const url = joinUrl(NAS_GATEWAY_URL, `object/authenticated/${enc}`);
+
+  const auth = await getNasAuthorization();
+  const resp = await fetch(url, { method: "GET", headers: auth ? { Authorization: auth } : undefined });
+  if (!resp.ok) {
+    const msg = await resp.text().catch(() => "");
+    throw new Error(`NAS 파일 조회 실패 (${resp.status}): ${msg || "요청이 거부되었습니다."}`);
+  }
+  return await resp.blob();
+}
+
+/** =========================
+ *  Bulk download (ZIP)
+ *  ========================= */
+function getExtFromPathMaybe(path) {
+  const s = String(path || "").split("?")[0];
+  const m = s.match(/\.([a-zA-Z0-9]{2,5})$/);
+  return m ? m[1].toLowerCase() : "jpg";
+}
+
+function buildZipEntryName(dateISO, sample, role, storagePath) {
+  const dateFolder = ymdDots(dateISO || sample?.measurement_date || "");
+  const p = sample?.p_index || "?";
+  const loc = sanitizeFilename(safeText(sample?.sample_location, "미입력"));
+  const roleKey = String(role || "photo");
+  const ext = getExtFromPathMaybe(storagePath);
+  const sampleFolder = sanitizeFilename(`P${p}_${loc}`);
+  return `${dateFolder}/${sampleFolder}/${roleKey}.${ext}`;
+}
+
+async function fetchStorageBlob(storagePath) {
+  const sp = String(storagePath || "");
+  if (!sp) throw new Error("storagePath가 비어있습니다.");
+
+  // NAS: authenticated fetch
+  if (sp.startsWith("nas:")) {
+    const rel = sp.slice(4).replace(/^\/+/, "");
+    return await nasFetchBlob(rel);
+  }
+
+  // Full URL: try direct, then NAS-auth fallback if it's a NAS public URL
+  if (isHttpUrl(sp)) {
+    try {
+      const r = await fetch(sp, { method: "GET" });
+      if (!r.ok) throw new Error(`다운로드 실패 (${r.status})`);
+      return await r.blob();
+    } catch (e) {
+      if (NAS_FILE_BASE && sp.startsWith(NAS_FILE_BASE) && NAS_GATEWAY_URL) {
+        const rel = sp.slice(NAS_FILE_BASE.length).replace(/^\/+/, "");
+        return await nasFetchBlob(rel);
+      }
+      throw e;
+    }
+  }
+
+  // Supabase storage path
+  const signed = await getSignedUrl(sp);
+  const r = await fetch(signed, { method: "GET" });
+  if (!r.ok) throw new Error(`다운로드 실패 (${r.status})`);
+  return await r.blob();
+}
+
+async function downloadAllPhotosZip() {
+  const job = state.job;
+  if (!job) return;
+
+  // collect
+  const items = [];
+  for (const d of (state.dates || [])) {
+    const samples = state.samplesByDate.get(d) || [];
+    for (const s of samples) {
+      for (const role of viewerRoleOrder(s)) {
+        const path = s._photoPath?.[role];
+        if (!path) continue;
+        items.push({ dateISO: d, sample: s, role, storagePath: path });
+      }
+    }
+  }
+
+  if (!items.length) {
+    setFoot("저장할 사진이 없습니다.");
+    alert("저장할 사진이 없습니다. (업로드된 사진이 있는지 확인해줘)");
+    return;
+  }
+
+  setFoot(`전체 사진 저장 준비 중... (${items.length}장)`);
+
+  // dynamic import JSZip
+  let JSZip = null;
+  try {
+    const mod = await import('https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm');
+    JSZip = mod?.default || mod;
+  } catch (e) {
+    console.warn('JSZip 로드 실패:', e);
+  }
+
+  if (!JSZip) {
+    // fallback: sequential single downloads (may be blocked by browser)
+    alert('ZIP 모듈을 불러오지 못해서, 사진을 한 장씩 다운로드로 진행할게. (브라우저가 여러 다운로드를 막을 수 있음)');
+    let i = 0;
+    for (const it of items) {
+      i += 1;
+      setFoot(`사진 다운로드 중... ${i}/${items.length}`);
+      try {
+        const blob = await fetchStorageBlob(it.storagePath);
+        const name = buildZipEntryName(it.dateISO, it.sample, it.role, it.storagePath).replace(/\//g, '_');
+        await saveBlobToDevice(blob, name, it.storagePath);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    setFoot('다운로드 요청을 완료했습니다.');
+    return;
+  }
+
+  const zip = new JSZip();
+  let idx = 0;
+  for (const it of items) {
+    idx += 1;
+    setFoot(`사진 모으는 중... ${idx}/${items.length}`);
+    try {
+      const blob = await fetchStorageBlob(it.storagePath);
+      const entry = buildZipEntryName(it.dateISO, it.sample, it.role, it.storagePath);
+      zip.file(entry, blob);
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  setFoot('ZIP 생성 중...');
+  const jobName = sanitizeFilename(safeText(job.project_name, 'job'));
+  const datePart = iso10(new Date());
+  const zipName = `${jobName}_${datePart}_photos.zip`;
+
+  const zipBlob = await zip.generateAsync(
+    { type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } },
+    (meta) => {
+      const pct = Math.floor(meta?.percent || 0);
+      if (pct % 5 == 0) setFoot(`ZIP 생성 중... ${pct}%`);
+    }
+  );
+
+  await saveBlobToDevice(zipBlob, zipName, '');
+}
+
 
 /** =========================
  *  Thumbnails
@@ -1605,6 +1952,23 @@ function renderJobWork() {
       el("div", { class: "col" }, [
         el("div", { class: "item-title", text: safeText(job.project_name, "(현장)") }),
         el("div", { class: "item-sub", text: [modeLabel(state.mode), safeText(job.address)].filter(Boolean).join(" · ") }),
+        ...(!HIDE_PHOTO_SAVE_UI ? [
+          el("div", { style: "margin-top:10px;" }, [
+            el("button", {
+              class: "btn",
+              text: "시료사진 전체 저장",
+              onclick: async () => {
+                try {
+                  await downloadAllPhotosZip();
+                } catch (e) {
+                  console.error(e);
+                  setFoot(`전체 저장 실패: ${e?.message || e}`);
+                  alert(e?.message || String(e));
+                }
+              },
+            }),
+          ]),
+        ] : []),
       ]),
       el("div", { class: "row", style: "gap:8px;" }, [
         dateAdd,
