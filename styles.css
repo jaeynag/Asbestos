@@ -542,3 +542,11 @@ display:flex;
 /* v2: viewer 헤더에 저장버튼 보일 때 간격 안정화 */
 #viewerSave{ }
 
+/* 모바일(PWA 포함)에서는 사진 저장 UI 숨김 */
+@media (max-width: 768px){
+  #modalSave,
+  #viewerSave{
+    display:none !important;
+  }
+}
+
