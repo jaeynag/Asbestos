@@ -1,30 +1,85 @@
 :root{
-  --bg:#f6f7f9; --card:#fff; --text:#111; --muted:#666; --line:#e8eaee;
-  --pri:#111; --priText:#fff;
+  --bg:#f6f7f9;
+  --card:#fff;
+  --text:#111;
+  --muted:#666;
+  --line:#e8eaee;
+
+  --pri:#111;
+  --priText:#fff;
   --danger:#d33b3b;
-  --dotGreen:#1aa251; --dotBlue:#2b6fff; --dotRed:#d33b3b; --dotGray:#b7bcc6;
+
+  --dotGreen:#1aa251;
+  --dotBlue:#2b6fff;
+  --dotRed:#d33b3b;
+  --dotGray:#b7bcc6;
 }
 
 *{ box-sizing:border-box; }
-body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, sans-serif; background:var(--bg); color:var(--text); -webkit-text-size-adjust:100%; }
-.app{ max-width: 820px; margin: 0 auto; min-height:100vh; display:flex; flex-direction:column; }
 
-.topbar{ padding:14px 16px 8px; padding-top: calc(14px + env(safe-area-inset-top)); display:flex; align-items:center; justify-content:space-between; gap:10px; position:relative; }
-.title{ display:flex; flex-direction:column; gap:2px; align-items:center; flex:1; }
+body{
+  margin:0;
+  font-family: system-ui, -apple-system, "Malgun Gothic", Arial, sans-serif;
+  background:var(--bg);
+  color:var(--text);
+  -webkit-text-size-adjust:100%;
+}
+
+.app{
+  max-width:820px;
+  margin:0 auto;
+  min-height:100vh;
+  display:flex;
+  flex-direction:column;
+}
+
+/* ===== Top bar ===== */
+.topbar{
+  padding:14px 16px 8px;
+  padding-top:calc(14px + env(safe-area-inset-top));
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  position:relative;
+}
+.title{
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+  align-items:center;
+  flex:1;
+}
 .h1{ font-size:18px; font-weight:800; }
 
+.top-actions{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  position:relative;
+}
+
 .iconBtn{
-  width:38px; height:38px;
+  width:38px;
+  height:38px;
   border-radius:12px;
   border:1px solid var(--line);
   background:#fff;
   cursor:pointer;
-  display:flex; align-items:center; justify-content:center;
+  display:flex;
+  align-items:center;
+  justify-content:center;
 }
-.iconBtn svg{ width:20px; height:20px; fill:none; stroke:#111; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+.iconBtn svg{
+  width:20px;
+  height:20px;
+  fill:none;
+  stroke:#111;
+  stroke-width:2;
+  stroke-linecap:round;
+  stroke-linejoin:round;
+}
 .iconBtn:active{ filter:brightness(0.97); }
-
-.top-actions{ display:flex; align-items:center; gap:8px; position:relative; }
 
 .menu{
   position:absolute;
@@ -34,14 +89,14 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   background:#fff;
   border:1px solid var(--line);
   border-radius:12px;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+  box-shadow:0 10px 30px rgba(0,0,0,0.08);
   overflow:hidden;
   z-index:20;
 }
 .menuItem{
   width:100%;
   text-align:left;
-  padding:12px 12px;
+  padding:12px;
   background:#fff;
   border:0;
   border-bottom:1px solid var(--line);
@@ -54,31 +109,116 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
 .menuItem.danger{ color:var(--danger); }
 .menuSep{ height:1px; background:var(--line); }
 
-.root{ padding: 0 16px 16px; flex:1; }
-.footer{ padding: 10px 16px 16px; padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
+/* ===== Page layout ===== */
+.root{ padding:0 16px 16px; flex:1; }
+.footer{
+  padding:10px 16px 16px;
+  padding-bottom:calc(16px + env(safe-area-inset-bottom));
+}
 .footStatus{ font-size:12px; color:var(--muted); min-height:16px; }
 
-.card{ background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; margin: 10px 0; box-shadow: 0 1px 0 rgba(0,0,0,0.02); }
+.card{
+  background:var(--card);
+  border:1px solid var(--line);
+  border-radius:14px;
+  padding:14px;
+  margin:10px 0;
+  box-shadow:0 1px 0 rgba(0,0,0,0.02);
+}
+
 .row{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
 .row.space{ justify-content:space-between; }
 .col{ display:flex; flex-direction:column; gap:6px; }
 .label{ font-size:12px; color:var(--muted); }
 
-.input, select{
+.input,
+select{
   width:100%;
-  padding:12px 12px;
+  padding:12px;
   border:1px solid var(--line);
   border-radius:12px;
   font-size:15px;
   background:#fff;
 }
+
 .btn{
-  border:1px solid var(--line); background:#fff; color:#111;
-  padding:10px 12px; border-radius:10px; font-size:14px; cursor:pointer;
+  border:1px solid var(--line);
+  background:#fff;
+  color:#111;
+  padding:10px 12px;
+  border-radius:10px;
+  font-size:14px;
+  cursor:pointer;
+}
+.btn.primary{ background:var(--pri); color:var(--priText); border-color:var(--pri); }
+.btn.ghost{ background:transparent; }
+.btn.small{ padding:7px 8px; font-size:13px; }
+.btn.block{ width:100%; }
+.btn:disabled{ opacity:.5; cursor:not-allowed; }
+.btn.danger{ border-color:var(--danger); color:var(--danger); background:#fff; }
+
+/* ===== Tabs & list ===== */
+.tabs{ display:flex; gap:8px; flex-wrap:wrap; }
+.tab{
+  padding:8px 10px;
+  border-radius:999px;
+  border:1px solid var(--line);
+  background:#fff;
+  cursor:pointer;
+  font-size:13px;
+}
+.tab.active{ background:#fff; color:#111; border-color:#111; font-weight:800; }
+
+.list{ display:flex; flex-direction:column; gap:8px; }
+.item{
+  border:1px solid var(--line);
+  background:#fff;
+  border-radius:12px;
+  padding:12px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+}
+.item-title{ font-weight:800; }
+.item-sub{ font-size:12px; color:var(--muted); margin-top:4px; }
+.item.clickable{ cursor:pointer; }
+
+.badge-new{
+  font-size:11px;
+  border:1px solid #111;
+  padding:3px 8px;
+  border-radius:999px;
+  background:#111;
+  color:#fff;
 }
 
+.chev{ font-size:22px; color:#999; line-height:1; padding-left:10px; }
 
-/* date controls (mobile) */
+/* ===== Status dot ===== */
+.dot{
+  width:10px;
+  height:10px;
+  border-radius:999px;
+  background:var(--dotGray);
+  border:1px solid rgba(0,0,0,.08);
+}
+.dot.green{ background:var(--dotGreen); }
+.dot.red{ background:var(--dotRed); }
+.dot.blue{ background:var(--dotBlue); }
+.dot.blink{ animation:blink 1s infinite; }
+@keyframes blink{ 0%,100%{opacity:1} 50%{opacity:.25} }
+
+/* ===== Auth ===== */
+.authTabs{ display:flex; gap:8px; margin-top:8px; }
+.authCard{
+  max-width:520px;
+  margin:14px auto;
+  padding:18px;
+}
+.gap-md{ gap:12px; }
+
+/* ===== Date controls ===== */
 .dateRow{
   display:flex;
   gap:8px;
@@ -88,51 +228,19 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
 }
 .dateControls{
   display:flex;
+  align-items:stretch;
   gap:8px;
-  align-items:center;
 }
+.dateControls .dateCol{ flex:1 1 auto; min-width:0; }
 .dateControls .dateInput{
   width:150px;
   padding:8px 10px;
   font-size:13px;
   border-radius:10px;
 }
+.dateControls > .btn{ flex:0 0 auto; width:auto; white-space:nowrap; }
 
-.btn.primary{ background:var(--pri); color:var(--priText); border-color:var(--pri); }
-.btn.ghost{ background:transparent; }
-.btn.small{ padding:7px 8px; font-size:13px; }
-.btn:disabled{ opacity:.5; cursor:not-allowed; }
-
-.tabs{ display:flex; gap:8px; flex-wrap:wrap; }
-.tab{ padding:8px 10px; border-radius:999px; border:1px solid var(--line); background:#fff; cursor:pointer; font-size:13px; }
-/* 검은 배경 제거: 선택만 테두리로 표시 */
-.tab.active{ background:#fff; color:#111; border-color:#111; font-weight:800; }
-
-.list{ display:flex; flex-direction:column; gap:8px; }
-.item{
-  border:1px solid var(--line); background:#fff; border-radius:12px;
-  padding:12px; display:flex; align-items:center; justify-content:space-between; gap:10px;
-}
-.item-title{ font-weight:800; }
-.item-sub{ font-size:12px; color:var(--muted); margin-top:4px; }
-.badge-new{
-  font-size:11px; border:1px solid #111; padding:3px 8px; border-radius:999px; background:#111; color:#fff;
-}
-
-.dot{
-  width:10px; height:10px; border-radius:999px; background:var(--dotGray);
-  border:1px solid rgba(0,0,0,.08);
-}
-.dot.green{ background:var(--dotGreen); }
-.dot.red{ background:var(--dotRed); }
-.dot.blue{ background:var(--dotBlue); }
-.dot.blink{ animation: blink 1s infinite; }
-@keyframes blink{ 0%,100%{ opacity:1 } 50%{ opacity:.25 } }
-
-/* ===== Auth tabs ===== */
-.authTabs{ display:flex; gap:8px; margin-top:8px; }
-
-/* ===== 삭제(X) 버튼 ===== */
+/* ===== Sample row ===== */
 .xBtn{
   position:absolute;
   left:10px;
@@ -152,7 +260,6 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
 }
 .xBtn:active{ filter:brightness(0.97); }
 
-/* ===== Sample row (더 콤팩트) ===== */
 .sampleRow{
   position:relative;
   display:flex;
@@ -161,19 +268,27 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   justify-content:space-between;
   gap:10px;
   padding:10px 12px;
-  padding-left:44px;           /* X 자리 */
+  padding-left:44px; /* X 자리 */
   border:1px solid var(--line);
   border-radius:12px;
   background:#fff;
   overflow:hidden;
 }
 
-.sampleLeft{ min-width: 220px; flex: 1; }
+.sampleLeft{ min-width:220px; flex:1; }
 .sampleTitle{ font-weight:900; font-size:14px; line-height:1.2; }
-.sampleMeta{ margin-top:6px; display:flex; flex-direction:column; gap:6px; font-size:12px; color:var(--muted); }
+.sampleMeta{
+  margin-top:6px;
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+  font-size:12px;
+  color:var(--muted);
+}
 .metaLine{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+
 .timeInput{
-  width: 120px;
+  width:120px;
   padding:6px 8px;
   border:1px solid var(--line);
   border-radius:10px;
@@ -194,8 +309,8 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
 .slotHead{ display:flex; align-items:center; justify-content:flex-end; gap:6px; font-size:12px; color:#666; }
 
 .thumbMini{
-  width: 88px;
-  height: 54px;
+  width:88px;
+  height:54px;
   border-radius:10px;
   border:1px dashed var(--line);
   background:#fafbfc;
@@ -206,15 +321,11 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   font-size:11px;
   color:var(--muted);
 }
-.thumbMini img{ width:100%; height:100%; object-fit:cover; }
+.thumbMini img{ display:block; width:100%; height:100%; object-fit:cover; max-width:100%; max-height:100%; }
 
 .slotBtns{ display:flex; gap:6px; }
 
-/* =========================
-   사진 배치: 모드별 정렬
-   ========================= */
-
-/* 오른쪽 영역 기본 */
+/* ===== Photo layout by mode ===== */
 .sampleRight.density,
 .sampleRight.scatter{
   display:flex;
@@ -223,121 +334,12 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   gap:12px;
 }
 
-/* 비산(Scatter)만: 사진 2칸 사이 간격을 조금 줄여서 텍스트 영역을 더 확보 */
 .sampleRow.mode-scatter .sampleRight.scatter{ gap:10px; }
-.sampleRow.mode-scatter .slotMini.scatter{ width: 120px; }
+.sampleRow.mode-scatter .slotMini.scatter{ width:120px; }
 
-/* 비산: 2개가 항상 옆으로 (좁아지면 wrap) */
-.sampleRight.scatter{
-  flex-wrap:nowrap;
-}
-@media (max-width: 520px){
-  .root{ padding: 0 12px 14px; }
-  .topbar{ padding:12px 12px 8px; }
+.sampleRight.scatter{ flex-wrap:nowrap; }
 
-  /* 입력/텍스트 영역이 잘리지 않게 */
-  .sampleLeft{ min-width:0; }
-  .timeInput{ width: 108px; }
-
-  /* 비산(2칸): 스샷처럼 오른쪽 사진영역을 같은 줄에 유지 */
-  .sampleRow.mode-scatter{
-    flex-wrap:nowrap;
-    align-items:flex-start;
-  }
-  .sampleRow.mode-scatter .sampleLeft{
-    flex:1 1 auto;
-    min-width:0;
-  }
-  .sampleRow.mode-scatter .sampleRight{
-    flex:0 0 auto;
-    width:auto;
-  }
-  .sampleRow.mode-scatter .sampleRight.scatter{
-    flex-wrap:nowrap;
-    gap:1px;
-  }
-  .sampleRow.mode-scatter .slotMini.scatter{
-    width: 85px;
-  }
-  .sampleRow.mode-scatter .thumbMini{
-    width: 86px;
-    height: 54px;
-  }
-  .sampleRow.mode-scatter .slotBtns{ gap:4px; }
-  .sampleRow.mode-scatter .slotBtns .btn.small{
-    padding:6px 7px;
-    font-size:12px;
-  }
-
-  /* 농도(1칸): 썸네일만 살짝 축소 */
-  .sampleRow.mode-density .thumbMini{
-    width: 88px;
-    height: 54px;
-  }
-
-  /* 날짜 컨트롤 */
-  .dateControls{
-    flex-wrap: nowrap;      /* 한 줄 고정 */
-    align-items: stretch;
-    gap: 8px;
-  }
-  .dateControls .dateCol{
-    flex: 1 1 auto;         /* 날짜 input이 남는 폭 먹게 */
-    min-width: 0;
-    flex-basis: auto;       /* 100% 금지 */
-  }
-  .dateControls .btn{
-    width: auto;            /* 100% 금지 */
-    flex: 0 0 auto;         /* 버튼은 내용만큼 */
-    white-space: nowrap;    /* “이 날짜로 이동” 줄바꿈 금지 */
-  }
-
-  /* 뷰어 버튼 */
-  .viewer-nav{ width:34px; height:34px; font-size:22px; line-height:32px; }
-}
-
-
-
-
-
-
-
-
-
-
-
-/* ===== 모바일: 날짜 입력칸 옆에 버튼(강제) ===== */
-/* 기존 CSS가 깨졌거나 다른 규칙이 덮어쓰는 경우를 대비해서 '파일 맨 아래'에서 강하게 재정의 */
-.dateControls{
-  display:flex;
-  align-items:stretch;
-  gap:8px;
-}
-.dateControls .dateCol{
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.dateControls > .btn{
-  flex: 0 0 auto;
-  width: auto;
-  white-space: nowrap;
-}
-
-@media (max-width: 520px){
-  .dateControls{
-    flex-wrap: nowrap !important;
-  }
-  .dateControls .dateCol{
-    flex-basis: auto !important;
-  }
-  .dateControls > .btn{
-    width: auto !important;
-  }
-}
-/* ===== 안전장치: hidden 속성은 무조건 display:none ===== */
-[hidden] { display: none !important; }
-
-/* ===== slotInline(농도) 배치 고정 ===== */
+/* 농도 slot inline 배치 고정 */
 .slotInline{
   display:flex;
   align-items:center;
@@ -346,10 +348,7 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   width:100%;
 }
 
-/* 썸네일 이미지가 블록으로 렌더되면서 레이아웃 깨지는 것 방지 */
-.thumbMini img{ display:block; max-width:100%; max-height:100%; }
-
-/* ===== 모달이 모바일에서 본문으로 흘러내리는 문제 방지 ===== */
+/* ===== Modal ===== */
 .modal{
   position:fixed;
   inset:0;
@@ -370,7 +369,7 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   background:#fff;
   border:1px solid var(--line);
   border-radius:14px;
-  box-shadow: 0 20px 50px rgba(0,0,0,0.18);
+  box-shadow:0 20px 50px rgba(0,0,0,0.18);
   overflow:hidden;
 }
 .modal-head{
@@ -392,7 +391,6 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   border-top:1px solid var(--line);
 }
 
-/* 업로드 확인 모달 미리보기 */
 .modal-preview{
   width:100%;
   height:auto;
@@ -403,7 +401,7 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   background:#fff;
 }
 
-/* ===== 뷰어 모달(썸네일 클릭) ===== */
+/* ===== Viewer modal ===== */
 .viewer-card{ width:min(820px, 100%); }
 .viewer-head-left{ display:flex; flex-direction:column; gap:2px; }
 .viewer-label{ font-size:12px; color:var(--muted); }
@@ -414,7 +412,7 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   justify-content:center;
   gap:10px;
   padding:10px;
-  overflow:auto; /* zoom2 대비 */
+  overflow:auto;
 }
 .viewer-img{
   max-width:100%;
@@ -424,12 +422,8 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   border:1px solid var(--line);
   background:#fff;
 }
-.viewer-img.zoom2{
-  transform:scale(2);
-  transform-origin:center;
-}
+.viewer-img.zoom2{ transform:scale(2); transform-origin:center; }
 
-/* (없으면 버튼이 이상해져서) */
 .viewer-nav{
   width:40px;
   height:40px;
@@ -442,37 +436,10 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
 }
 .viewer-nav:disabled{ opacity:.45; cursor:not-allowed; }
 
-/* ===== danger 버튼 ===== */
-.btn.danger{
-  border-color: var(--danger);
-  color: var(--danger);
-  background:#fff;
-}
-
-/* ===== 모바일에서 로그인/선택 화면 여백 ===== */
-.authCard{
-  max-width: 520px;
-  margin: 14px auto;
-  padding: 18px;
-}
-.gap-md{ gap:12px; }
-.btn.block{ width:100%; }
-
-/* 현장 헤더 줄: 모바일에서 오른쪽 버튼/뱃지 줄바꿈 */
-@media (max-width: 520px){
-  .row.stack-mobile{ flex-direction:column; align-items:stretch; }
-  .row.stack-mobile-right{ width:100%; justify-content:space-between; }
-}
-
-
-.item.clickable{ cursor:pointer; }
-.chev{ font-size:22px; color:#999; line-height:1; padding-left:10px; }
-
-
-/* ===== Choice cards (Mode) ===== */
+/* ===== Choice cards (mode) ===== */
 .choiceGrid{
   display:grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns:1fr 1fr;
   gap:12px;
   margin-top:12px;
 }
@@ -483,7 +450,7 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   padding:16px;
   text-align:center;
   cursor:pointer;
-display:flex;
+  display:flex;
   flex-direction:column;
   align-items:center;
   justify-content:center;
@@ -491,17 +458,12 @@ display:flex;
 }
 .choiceCard:active{ filter:brightness(0.97); }
 .choiceTitle{ font-size:18px; font-weight:900; }
-.choiceSub{ font-size:12px; color:var(--muted); margin-top:6px; }
-@media (max-width: 420px){
-  .choiceGrid{ grid-template-columns: 1fr; }
-}
+
+/* 현재는 서브텍스트를 숨김(디자인 정책) */
+.choiceSub{ display:none !important; }
 
 /* ===== Swipe to delete ===== */
-.swipeRow{
-  position:relative;
-  overflow:hidden;
-  border-radius:12px;
-}
+.swipeRow{ position:relative; overflow:hidden; border-radius:12px; }
 .swipeActions{
   position:absolute;
   inset:0;
@@ -522,18 +484,53 @@ display:flex;
 .swipeContent{
   position:relative;
   z-index:1;
-  touch-action: pan-y;
-  transform: translateX(0px);
+  touch-action:pan-y;
+  transform:translateX(0px);
   background:#fff;
   border-radius:12px;
   overflow:hidden;
 }
 .swipeRow.dragging .swipeContent{ transition:none !important; }
 
-
-/* 섹션 라벨 아래 여백 */
 .sectionLabel{ display:block; margin-bottom:10px; }
 
-.choiceSub{ display:none !important; }
+/* ===== Utilities ===== */
+[hidden]{ display:none !important; }
 
+/* ===== Responsive ===== */
+@media (max-width: 520px){
+  .root{ padding:0 12px 14px; }
+  .topbar{ padding:12px 12px 8px; }
 
+  .sampleLeft{ min-width:0; }
+  .timeInput{ width:108px; }
+
+  /* 비산(2칸): 오른쪽 사진영역을 같은 줄에 유지 */
+  .sampleRow.mode-scatter{
+    flex-wrap:nowrap;
+    align-items:flex-start;
+  }
+  .sampleRow.mode-scatter .sampleLeft{ flex:1 1 auto; min-width:0; }
+  .sampleRow.mode-scatter .sampleRight{ flex:0 0 auto; width:auto; }
+  .sampleRow.mode-scatter .sampleRight.scatter{ flex-wrap:nowrap; gap:1px; }
+  .sampleRow.mode-scatter .slotMini.scatter{ width:85px; }
+  .sampleRow.mode-scatter .thumbMini{ width:86px; height:54px; }
+  .sampleRow.mode-scatter .slotBtns{ gap:4px; }
+  .sampleRow.mode-scatter .slotBtns .btn.small{ padding:6px 7px; font-size:12px; }
+
+  /* 날짜 컨트롤: 한 줄 고정 */
+  .dateControls{ flex-wrap:nowrap !important; }
+  .dateControls .dateCol{ flex-basis:auto !important; }
+  .dateControls > .btn{ width:auto !important; }
+
+  /* 뷰어 버튼 */
+  .viewer-nav{ width:34px; height:34px; font-size:22px; line-height:32px; }
+
+  /* 현장 헤더 줄: 모바일에서 오른쪽 버튼/뱃지 줄바꿈 */
+  .row.stack-mobile{ flex-direction:column; align-items:stretch; }
+  .row.stack-mobile-right{ width:100%; justify-content:space-between; }
+}
+
+@media (max-width: 420px){
+  .choiceGrid{ grid-template-columns:1fr; }
+}
