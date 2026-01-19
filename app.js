@@ -61,12 +61,21 @@ function _isGithubIoHost() {
   }
 }
 
+// iOS PWA/일부 WebView에서 localStorage 접근이 SecurityError로 터지는 케이스 방어
+function lsGet(key) {
+  try {
+    return _trim(localStorage.getItem(key));
+  } catch {
+    return "";
+  }
+}
+
 // 우선순위: localStorage(개발/테스트) > window.APP_CONFIG(배포 설정) > 자동(커스텀 도메인에서는 현재 도메인)
-const LS_GATEWAY = _trim(localStorage.getItem("NAS_GATEWAY_URL"));
-const LS_UPLOAD = _trim(localStorage.getItem("NAS_UPLOAD_URL"));
-const LS_FILE_BASE = _trim(localStorage.getItem("NAS_FILE_BASE"));
-const LS_DELETE = _trim(localStorage.getItem("NAS_DELETE_URL"));
-const LS_AUTH = _trim(localStorage.getItem("NAS_AUTH_TOKEN"));
+const LS_GATEWAY = lsGet("NAS_GATEWAY_URL");
+const LS_UPLOAD = lsGet("NAS_UPLOAD_URL");
+const LS_FILE_BASE = lsGet("NAS_FILE_BASE");
+const LS_DELETE = lsGet("NAS_DELETE_URL");
+const LS_AUTH = lsGet("NAS_AUTH_TOKEN");
 
 const CFG_GATEWAY = _trim(APP_CONFIG.NAS_GATEWAY_URL);
 const CFG_UPLOAD = _trim(APP_CONFIG.NAS_UPLOAD_URL);
@@ -1753,6 +1762,8 @@ function renderJobWork() {
  *  Bootstrap
  *  ========================= */
 (async function boot() {
+  // index.html에서 부팅 지연/실패 감지용
+  try { window.__APP_BOOTED = false; } catch {}
   try {
     setFoot("초기화 중...");
     await loadSession();
@@ -1760,6 +1771,8 @@ function renderJobWork() {
       await loadCompanies();
     }
     render();
+
+    try { window.__APP_BOOTED = true; } catch {}
 
     // auth state change
     supabase.auth.onAuthStateChange(async (_event, session) => {
@@ -1787,5 +1800,6 @@ function renderJobWork() {
     console.error(e);
     setFoot(`초기화 실패: ${e?.message || e}`);
     render();
+    try { window.__APP_BOOTED = false; } catch {}
   }
 })();
