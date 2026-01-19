@@ -8,7 +8,7 @@
   <meta http-equiv="Expires" content="0" />
   <meta name="color-scheme" content="light" />
   <title>Asbestos field photos</title>
-  <link rel="stylesheet" href="./styles.css?v=20260119-04" />
+  <link rel="stylesheet" href="./styles.css?v=20260119-07" />
   <link rel="icon" href="./favicon.ico" />
   <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
   <link rel="manifest" href="./manifest.json" />
@@ -104,60 +104,6 @@
     };
   </script>
 
-  <script>
-    (function(){
-      function safeText(v){ try{ return String(v); }catch{ return '';} }
-      function show(msg){
-        try{
-          var root=document.getElementById('root');
-          var foot=document.getElementById('footStatus');
-          if (foot) foot.textContent = msg;
-          if (!root) return;
-          if (root.childElementCount>0) return;
-          var card=document.createElement('div');
-          card.className='card';
-          var h=document.createElement('div');
-          h.style.fontWeight='800';
-          h.style.marginBottom='8px';
-          h.textContent='화면이 멈춘 것처럼 보일 때';
-          var p=document.createElement('div');
-          p.style.fontSize='13px';
-          p.style.color='#666';
-          p.textContent=msg;
-          var btn=document.createElement('button');
-          btn.className='btn';
-          btn.style.marginTop='10px';
-          btn.textContent='강제 새로고침';
-          btn.onclick=function(){ try{ location.reload(true); }catch{ location.reload(); } };
-          card.appendChild(h); card.appendChild(p); card.appendChild(btn);
-          root.appendChild(card);
-        }catch{}
-      }
-
-      window.addEventListener('error', function(ev){
-        var m = ev && (ev.message || (ev.error && ev.error.message));
-        if (m) show('오류: '+safeText(m));
-      });
-      window.addEventListener('unhandledrejection', function(ev){
-        var r = ev && ev.reason;
-        var m = r && (r.message || r);
-        if (m) show('오류: '+safeText(m));
-      });
-
-      setTimeout(function(){
-        if (!window.__APP_DID_RENDER__){
-          if (!window.__APP_JS_LOADED__){
-            show('app.js(또는 외부 모듈) 로드가 실패했어. 네트워크/캐시 문제일 수 있음. 홈화면이면 아이콘 삭제 후 다시 추가가 제일 확실해.');
-          } else {
-            show('스크립트는 로드됐는데 렌더가 안 됐어. 하단 상태문구/콘솔 오류를 확인해줘.');
-          }
-        }
-      }, 2500);
-    })();
-  </script>
-
-  <script type="module" src="./app.js?v=20260119-06"></script>
+  <script type="module" src="./app.js?v=20260119-07"></script>
 </body>
 </html>
-
-
