@@ -20,9 +20,6 @@
 
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 
-// 디버그/로딩 상태 플래그 (모듈 로드 자체 확인용)
-try { if (typeof window !== 'undefined') window.__APP_JS_LOADED__ = true; } catch {}
-
 /** =========================
  *  Config
  *  ========================= */
@@ -64,21 +61,12 @@ function _isGithubIoHost() {
   }
 }
 
-// iOS Safari/PWA에서 localStorage 접근이 SecurityError로 터지는 케이스 방어
-function _lsGet(key) {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
 // 우선순위: localStorage(개발/테스트) > window.APP_CONFIG(배포 설정) > 자동(커스텀 도메인에서는 현재 도메인)
-const LS_GATEWAY = _trim(_lsGet("NAS_GATEWAY_URL"));
-const LS_UPLOAD = _trim(_lsGet("NAS_UPLOAD_URL"));
-const LS_FILE_BASE = _trim(_lsGet("NAS_FILE_BASE"));
-const LS_DELETE = _trim(_lsGet("NAS_DELETE_URL"));
-const LS_AUTH = _trim(_lsGet("NAS_AUTH_TOKEN"));
+const LS_GATEWAY = _trim(localStorage.getItem("NAS_GATEWAY_URL"));
+const LS_UPLOAD = _trim(localStorage.getItem("NAS_UPLOAD_URL"));
+const LS_FILE_BASE = _trim(localStorage.getItem("NAS_FILE_BASE"));
+const LS_DELETE = _trim(localStorage.getItem("NAS_DELETE_URL"));
+const LS_AUTH = _trim(localStorage.getItem("NAS_AUTH_TOKEN"));
 
 const CFG_GATEWAY = _trim(APP_CONFIG.NAS_GATEWAY_URL);
 const CFG_UPLOAD = _trim(APP_CONFIG.NAS_UPLOAD_URL);
@@ -92,44 +80,6 @@ const NAS_GATEWAY_URL = _normBase(LS_GATEWAY || CFG_GATEWAY || AUTO_GATEWAY);
 const NAS_UPLOAD_URL = _trim(LS_UPLOAD || CFG_UPLOAD || (NAS_GATEWAY_URL ? `${NAS_GATEWAY_URL}/upload` : ""));
 const NAS_FILE_BASE = _normBase(LS_FILE_BASE || CFG_FILE_BASE || (NAS_GATEWAY_URL ? `${NAS_GATEWAY_URL}/public` : ""));
 const NAS_DELETE_URL = _trim(LS_DELETE || CFG_DELETE || "");
-
-const FETCH_TIMEOUT_MS = 15000; // 초기 로딩/쿼리 타임아웃
-const BOOT_WATCHDOG_MS = 12000;  // 부팅 watchdog
-
-function withTimeout(promise, ms, label = '작업') {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const t = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      reject(new Error(`${label} 시간 초과 (${Math.round(ms/1000)}s)`));
-    }, ms);
-
-    Promise.resolve(promise)
-      .then((v) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(t);
-        resolve(v);
-      })
-      .catch((e) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(t);
-        reject(e);
-      });
-  });
-}
-
-// 타임아웃이 나도 앱을 죽이지 않고 "지연"으로만 처리
-async function softTimeout(promise, ms, label = '작업') {
-  try {
-    const v = await withTimeout(promise, ms, label);
-    return { ok: true, value: v };
-  } catch (e) {
-    return { ok: false, error: e };
-  }
-}
 
 
 async function getNasAuthorization() {
@@ -254,7 +204,36 @@ function joinUrl(base, path) {
 /** =========================
  *  Supabase
  *  ========================= */
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// Supabase client (iOS PWA/PC WebView에서 storage 접근이 막히거나, 세션이 내부에 안 붙는 케이스 방어)
+const __memStore = (() => {
+  const m = Object.create(null);
+  return {
+    getItem: (k) => (k in m ? m[k] : null),
+    setItem: (k, v) => { m[k] = String(v); },
+    removeItem: (k) => { delete m[k]
+    },
+  };
+})();
+
+function safeStorage() {
+  try {
+    const t = '__sb_test__';
+    localStorage.setItem(t, '1');
+    localStorage.removeItem(t);
+    return localStorage;
+  } catch {
+    return __memStore;
+  }
+}
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
+    storage: safeStorage(),
+  },
+});
 
 /** =========================
  *  State
@@ -267,7 +246,6 @@ const state = {
   jobs: [],
 
   companies: [],
-  companiesError: "",
 
   dates: [],
   activeDate: null,
@@ -291,8 +269,6 @@ const state = {
     objectUrl: null,
   },
 };
-
-let _authListenerBound = false;
 
 /** =========================
  *  DOM refs
@@ -1183,24 +1159,32 @@ async function deleteJobAndRelated(job) {
  *  Loaders
  *  ========================= */
 async function loadSession() {
+  // 일부 환경(iOS 홈화면/PC WebView)에서 getSession으로는 user가 보이는데,
+  // 내부 클라이언트에 access token 이 붙지 않아 RLS가 전부 비는 케이스가 있어 setSession으로 강제 동기화한다.
   const { data } = await supabase.auth.getSession();
-  state.user = data?.session?.user || null;
+  const sess = data?.session || null;
+  state.user = sess?.user || null;
+
+  if (sess?.access_token && sess?.refresh_token) {
+    try {
+      await supabase.auth.setSession({
+        access_token: sess.access_token,
+        refresh_token: sess.refresh_token,
+      });
+    } catch (e) {
+      console.warn('setSession sync failed:', e);
+    }
+  }
+
   if (state.user) {
-    setFoot("로그인되었습니다.");
+    setFoot('로그인되었습니다.');
   }
 }
 
 async function loadCompanies() {
-  state.companiesError = "";
   setFoot("회사 목록을 불러오는 중입니다...");
-  try {
-    state.companies = await fetchCompanies();
-    setFoot("준비되었습니다.");
-  } catch (e) {
-    state.companies = [];
-    state.companiesError = e?.message || String(e);
-    setFoot(`회사 목록 불러오기 실패: ${state.companiesError}`);
-  }
+  state.companies = await fetchCompanies();
+  setFoot("준비되었습니다.");
 }
 
 async function loadJobs() {
@@ -1294,8 +1278,6 @@ function render() {
 
   // viewer overlay
   if (state.viewer.open) renderViewer();
-
-  try { if (typeof window !== 'undefined') window.__APP_DID_RENDER__ = true; } catch {}
 }
 
 /** ===== Auth ===== */
@@ -1410,31 +1392,8 @@ function renderAuth() {
 function renderCompanySelect() {
   const list = el("div", { class: "list" });
 
-  const retryRow = el("div", { class: "row", style: "justify-content:flex-end; margin-top:10px;" }, [
-    el("button", {
-      class: "btn",
-      text: "회사 목록 새로고침",
-      onclick: async () => {
-        await loadCompanies();
-        render();
-      },
-    }),
-  ]);
-
-  if (state.companiesError) {
-    list.appendChild(
-      el("div", { class: "card" }, [
-        el("div", { class: "item-title", text: "회사 목록을 불러오지 못했습니다." }),
-        el("div", { class: "item-sub", text: state.companiesError }),
-      ])
-    );
-  }
-
   if (!state.companies.length) {
-    const msg = state.companiesError
-      ? "(새로고침을 눌러 다시 시도해줘)"
-      : `접근 허용된 회사가 없습니다. 관리자에게 권한 요청 필요\n(로그인 이메일: ${state.user?.email || ""})`;
-    list.appendChild(el("div", { class: "card", text: msg }));
+    list.appendChild(el("div", { class: "card", text: "회사 목록이 비어 있습니다." }));
   } else {
     for (const c of state.companies) {
       list.appendChild(
@@ -1460,7 +1419,6 @@ function renderCompanySelect() {
 
   root.appendChild(el("div", { class: "card" }, [
     el("div", { class: "label", text: "회사 선택" }),
-    retryRow,
     list,
   ]));
 }
@@ -1795,20 +1753,15 @@ function renderJobWork() {
  *  Bootstrap
  *  ========================= */
 (async function boot() {
-  let bootFinished = false;
-  const watchdog = setTimeout(() => {
-    if (!bootFinished) {
-      setFoot("초기화 지연: 네트워크/로그인 상태를 확인해줘.");
-      try { render(); } catch {}
+  try {
+    setFoot("초기화 중...");
+    await loadSession();
+    if (state.user) {
+      await loadCompanies();
     }
-  }, BOOT_WATCHDOG_MS);
+    render();
 
-  setFoot("초기화 중...");
-  render();
-
-  // auth state change (초기화 실패 여부와 무관하게 항상 바인딩)
-  if (!_authListenerBound) {
-    _authListenerBound = true;
+    // auth state change
     supabase.auth.onAuthStateChange(async (_event, session) => {
       state.user = session?.user || null;
       if (state.user) {
@@ -1819,35 +1772,20 @@ function renderJobWork() {
         state.job = null;
         state.jobs = [];
         state.companies = [];
-        state.companiesError = "";
       }
       render();
     });
-  }
 
-  try {
-    const sess = await softTimeout(loadSession(), FETCH_TIMEOUT_MS, "세션 초기화");
-    if (!sess.ok) {
-      console.warn(sess.error);
-      setFoot(`세션 초기화 지연: ${sess.error?.message || sess.error}`);
-      // auth listener가 나중에 세션을 가져올 수도 있으니 앱은 계속 진행
+    // initial companies if logged in
+    if (state.user && !state.companies.length) {
+      await loadCompanies();
+      render();
     }
 
-    if (state.user) {
-      const comps = await softTimeout(loadCompanies(), FETCH_TIMEOUT_MS, "회사 목록");
-      if (!comps.ok) {
-        console.warn(comps.error);
-        // loadCompanies 내부에서 에러 메시지/상태 처리함
-      }
-    }
-
-    render();
+    // initial jobs if already have selection in memory (future)
   } catch (e) {
     console.error(e);
     setFoot(`초기화 실패: ${e?.message || e}`);
     render();
-  } finally {
-    bootFinished = true;
-    clearTimeout(watchdog);
   }
 })();
