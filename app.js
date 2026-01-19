@@ -18,7 +18,27 @@
 //   - Supabase Storage: "companyId/mode/jobId/.../role.jpg" (상대경로)
 //   - NAS:             "https://.../files/.../role.jpg" (URL)
 
-import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+// NOTE: iOS 홈화면(PWA)/일부 WebView에서 외부 ESM CDN 로드가 간헐적으로 실패하는 케이스가 있어
+// supabase-js는 동적 import로 로드합니다(로컬 파일 우선, 실패 시 CDN).
+async function loadSupabaseModule() {
+  const candidates = [
+    // 로컬로 번들해두면 PWA 안정성이 확 올라감(추천)
+    "./vendor/supabase-js@2.esm.js",
+    "./vendor/supabase-js@2/+esm.js",
+    // 최후 fallback
+    "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm",
+  ];
+  let lastErr = null;
+  for (const url of candidates) {
+    try {
+      return await import(url);
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error("supabase-js 모듈을 로드하지 못했습니다.");
+}
+
 
 /** =========================
  *  Config
@@ -99,7 +119,8 @@ async function getNasAuthorization() {
     return `Bearer ${raw}`;
   }
   try {
-    const { data } = await supabase.auth.getSession();
+    const sb = await initSupabase();
+    const { data } = await sb.auth.getSession();
     const token = data?.session?.access_token;
     if (token) return `Bearer ${token}`;
   } catch {
@@ -235,14 +256,31 @@ function safeStorage() {
   }
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-  auth: {
-    persistSession: true,
-    autoRefreshToken: true,
-    detectSessionInUrl: true,
-    storage: safeStorage(),
-  },
-});
+let supabase = null;
+let __supabaseInitPromise = null;
+
+async function initSupabase() {
+  if (supabase) return supabase;
+  if (__supabaseInitPromise) return __supabaseInitPromise;
+  __supabaseInitPromise = (async () => {
+    const mod = await loadSupabaseModule();
+    const createClient = mod?.createClient || mod?.default?.createClient;
+    if (typeof createClient !== "function") {
+      throw new Error("supabase-js createClient를 찾지 못했습니다.");
+    }
+    supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+        storage: safeStorage(),
+      },
+    });
+    return supabase;
+  })();
+  return __supabaseInitPromise;
+}
+
 
 /** =========================
  *  State
@@ -400,6 +438,7 @@ menuChangeCompany?.addEventListener("click", () => {
 menuSignOut?.addEventListener("click", async () => {
   if (!state.user) return;
   closeSettings();
+  await initSupabase();
   await supabase.auth.signOut();
   state.user = null;
   state.company = null;
@@ -1766,6 +1805,7 @@ function renderJobWork() {
   try { window.__APP_BOOTED = false; } catch {}
   try {
     setFoot("초기화 중...");
+    await initSupabase();
     await loadSession();
     if (state.user) {
       await loadCompanies();
