@@ -1,4 +1,4 @@
-// app.js (GitHub Pages web uploader)
+\// app.js (GitHub Pages web uploader)
 // - UI: index.html + styles.css classes are kept
 // - Data: Supabase (Auth + PostgREST)
 // - Heavy files: NAS 업로드(권장) / Supabase Storage(예비)
@@ -99,6 +99,34 @@ async function getNasAuthorization() {
     // ignore
   }
   return "";
+}
+
+// --- Network robustness (PWA/iOS) ---
+const FETCH_TIMEOUT_MS = 15000;
+const BOOT_WATCHDOG_MS = 12000;
+
+function withTimeout(promise, ms, label) {
+  let t;
+  const timeout = new Promise((_, reject) => {
+    t = setTimeout(() => reject(new Error(`${label || '작업'} 타임아웃 (${ms}ms)`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
+}
+
+async function fetchWithTimeout(url, options = {}, ms = FETCH_TIMEOUT_MS) {
+  // AbortController가 가능한 환경이면 fetch 자체를 중단해서 '무한 pending'을 끊는다.
+  const hasAbort = typeof AbortController !== 'undefined' && !options.signal;
+  if (hasAbort) {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), ms);
+    try {
+      return await fetch(url, { ...options, signal: ctl.signal });
+    } finally {
+      clearTimeout(t);
+    }
+  }
+  // signal이 이미 있거나 AbortController가 없으면 레이스로만 방어(취소는 못 함)
+  return await withTimeout(fetch(url, options), ms, '네트워크 요청');
 }
 
 /** =========================
@@ -786,7 +814,7 @@ async function nasUpload(meta, file) {
   if (meta?.mode) fd.append("mode", String(meta.mode));
 
   const auth = await getNasAuthorization();
-  const resp = await fetch(NAS_UPLOAD_URL, { method: "POST", headers: auth ? { Authorization: auth } : undefined, body: fd });
+  const resp = await fetchWithTimeout(NAS_UPLOAD_URL, { method: "POST", headers: auth ? { Authorization: auth } : undefined, body: fd });
 
   const ct = resp.headers.get("content-type") || "";
   let js = null;
@@ -837,7 +865,7 @@ async function nasDeleteByPathOrUrl(storagePath) {
 
   try {
     const auth = await getNasAuthorization();
-    await fetch(NAS_DELETE_URL, { method: "POST", headers: auth ? { Authorization: auth } : undefined, body: fd });
+    await fetchWithTimeout(NAS_DELETE_URL, { method: "POST", headers: auth ? { Authorization: auth } : undefined, body: fd });
   } catch {
     // ignore
   }
@@ -856,7 +884,7 @@ async function nasFetchBlobUrl(relPath) {
   const url = joinUrl(NAS_GATEWAY_URL, `object/authenticated/${enc}`);
 
   const auth = await getNasAuthorization();
-  const resp = await fetch(url, { method: "GET", headers: auth ? { Authorization: auth } : undefined });
+  const resp = await fetchWithTimeout(url, { method: "GET", headers: auth ? { Authorization: auth } : undefined });
   if (!resp.ok) {
     const msg = await resp.text().catch(() => "");
     throw new Error(`NAS 파일 조회 실패 (${resp.status}): ${msg || "요청이 거부되었습니다."}`);
@@ -873,7 +901,7 @@ async function nasFetchBlob(relPath) {
   const url = joinUrl(NAS_GATEWAY_URL, `object/authenticated/${enc}`);
 
   const auth = await getNasAuthorization();
-  const resp = await fetch(url, { method: "GET", headers: auth ? { Authorization: auth } : undefined });
+  const resp = await fetchWithTimeout(url, { method: "GET", headers: auth ? { Authorization: auth } : undefined });
   if (!resp.ok) {
     const msg = await resp.text().catch(() => "");
     throw new Error(`NAS 파일 조회 실패 (${resp.status}): ${msg || "요청이 거부되었습니다."}`);
@@ -1733,15 +1761,52 @@ function renderJobWork() {
   }
 }
 
+
+// --- Global guards (PWA/iOS에서 무한로딩처럼 보이는 케이스 방지) ---
+(function setupGlobalGuards() {
+  try {
+    window.addEventListener('pageshow', (e) => {
+      // iOS BFCache에서 복귀하면 JS 상태가 꼬여 무한로딩처럼 보일 수 있음
+      if (e && e.persisted) location.reload();
+    });
+
+    window.addEventListener('online', () => setFoot('온라인'));
+    window.addEventListener('offline', () => setFoot('오프라인: 네트워크를 확인하세요.'));
+
+    window.addEventListener('unhandledrejection', (ev) => {
+      const msg = ev?.reason?.message || String(ev?.reason || '알 수 없는 오류');
+      console.error('unhandledrejection', ev?.reason);
+      setFoot(`오류: ${msg}`);
+    });
+
+    window.addEventListener('error', (ev) => {
+      const msg = ev?.error?.message || ev?.message || '알 수 없는 오류';
+      console.error('error', ev?.error || ev);
+      setFoot(`오류: ${msg}`);
+    });
+  } catch {
+    // ignore
+  }
+})();
 /** =========================
  *  Bootstrap
  *  ========================= */
 (async function boot() {
+  let bootFinished = false;
+  const watchdog = setTimeout(() => {
+    if (!bootFinished) {
+      // 초기 네트워크가 끊겼거나 iOS에서 pending이 길어질 때 화면이 멈춘 것처럼 보이는 걸 방지
+      setFoot('초기화 지연: 네트워크 확인 후 다시 시도하세요.');
+      try { render(); } catch {}
+    }
+  }, BOOT_WATCHDOG_MS);
+
   try {
     setFoot("초기화 중...");
-    await loadSession();
+    render();
+    await withTimeout(loadSession(), FETCH_TIMEOUT_MS, '세션 초기화');
     if (state.user) {
-      await loadCompanies();
+      await withTimeout(loadCompanies(), FETCH_TIMEOUT_MS, '회사 목록');
     }
     render();
 
@@ -1762,14 +1827,19 @@ function renderJobWork() {
 
     // initial companies if logged in
     if (state.user && !state.companies.length) {
-      await loadCompanies();
+      await withTimeout(loadCompanies(), FETCH_TIMEOUT_MS, '회사 목록');
       render();
     }
 
     // initial jobs if already have selection in memory (future)
+
+    bootFinished = true;
+    clearTimeout(watchdog);
   } catch (e) {
     console.error(e);
     setFoot(`초기화 실패: ${e?.message || e}`);
+    bootFinished = true;
+    clearTimeout(watchdog);
     render();
   }
 })();
