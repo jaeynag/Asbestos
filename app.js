@@ -193,26 +193,6 @@ function isHttpUrl(s) {
   return typeof s === "string" && /^https?:\/\//i.test(s);
 }
 
-function withCacheBust(url, tag) {
-  // 썸네일이 이전 이미지로 남는(브라우저 캐시) 현상 방지용
-  // 서명 URL(token=...)은 임의 파라미터 추가 시 깨질 수 있어 제외
-  try {
-    const u = new URL(url);
-    if (u.searchParams.has("token")) return url;
-
-    // presigned URL 계열은 보수적으로 제외
-    for (const k of u.searchParams.keys()) {
-      if (/^x-amz-/i.test(k) || /^x-goog-/i.test(k)) return url;
-    }
-
-    u.searchParams.set("v", String(tag ?? Date.now()));
-    return u.toString();
-  } catch {
-    const sep = url.includes("?") ? "&" : "?";
-    return `${url}${sep}v=${encodeURIComponent(String(tag ?? Date.now()))}`;
-  }
-}
-
 function joinUrl(base, path) {
   try {
     return new URL(path.replace(/^\//, ""), base.replace(/\/$/, "") + "/").toString();
@@ -224,7 +204,47 @@ function joinUrl(base, path) {
 /** =========================
  *  Supabase
  *  ========================= */
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+/** =========================
+ *  Network hardening (PWA home-screen infinite loading guard)
+ *  ========================= */
+const FETCH_TIMEOUT_MS = 15000; // 15s
+
+function fetchWithTimeout(input, init = {}) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+
+  // If caller provided a signal, abort our controller when theirs aborts
+  try {
+    if (init && init.signal) {
+      const s = init.signal;
+      if (s.aborted) ctrl.abort();
+      else s.addEventListener('abort', () => ctrl.abort(), { once: true });
+    }
+  } catch {
+    // ignore
+  }
+
+  const merged = { ...init, signal: ctrl.signal };
+  return fetch(input, merged).finally(() => clearTimeout(timer));
+}
+
+function isAbortError(e) {
+  return !!e && (e.name === 'AbortError' || String(e.message || '').toLowerCase().includes('abort'));
+}
+
+function netHintMessage(e) {
+  if (!navigator.onLine) return '네트워크가 오프라인이야. 데이터/와이파이 확인해줘.';
+  if (isAbortError(e)) return `네트워크가 느려서 요청이 ${Math.round(FETCH_TIMEOUT_MS/1000)}초 안에 끝나지 않았어. (새로고침 추천)`;
+  return '네트워크/CORS/서버 상태 때문에 로딩이 막혔을 수 있어.';
+}
+
+/** =========================
+ *  Supabase
+ *  ========================= */
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  global: { fetch: fetchWithTimeout },
+});
 
 /** =========================
  *  State
@@ -267,7 +287,6 @@ const state = {
 const root = document.getElementById("root");
 const btnBack = document.getElementById("btnBack");
 const btnGear = document.getElementById("btnGear");
-const appTitleEl = document.querySelector(".topbar .h1");
 const settingsMenu = document.getElementById("settingsMenu");
 const menuChangeMode = document.getElementById("menuChangeMode");
 const menuChangeCompany = document.getElementById("menuChangeCompany");
@@ -279,7 +298,6 @@ const modalTitle = document.getElementById("modalTitle");
 const modalPreview = document.getElementById("modalPreview");
 const modalMeta = document.getElementById("modalMeta");
 const modalClose = document.getElementById("modalClose");
-const modalSave = document.getElementById("modalSave");
 const modalReject = document.getElementById("modalReject");
 const modalAccept = document.getElementById("modalAccept");
 
@@ -289,7 +307,6 @@ const viewerTitle = document.getElementById("viewerTitle");
 const viewerImg = document.getElementById("viewerImg");
 const viewerLabel = document.getElementById("viewerLabel");
 const viewerClose = document.getElementById("viewerClose");
-const viewerSave = document.getElementById("viewerSave");
 const viewerPrev = document.getElementById("viewerPrev");
 const viewerNext = document.getElementById("viewerNext");
 const viewerZoom = document.getElementById("viewerZoom");
@@ -319,14 +336,6 @@ function updateHeader() {
 
   if (menuChangeMode) menuChangeMode.disabled = !state.mode;
   if (menuChangeCompany) menuChangeCompany.disabled = !state.company;
-
-  // Title
-  const baseTitle = "Asbestos field photos";
-  let title = baseTitle;
-  if (state.user && state.company) title = safeText(state.company?.name, baseTitle);
-  if (appTitleEl) appTitleEl.textContent = title;
-  try { document.title = title; } catch {}
-
 }
 
 function goBack() {
@@ -427,78 +436,7 @@ function closeModal() {
   if (modal) modal.hidden = true;
 }
 
-async function saveFileToDevice(file) {
-  if (!file) return;
-
-  // 1) 공유(가능한 기기/브라우저에서는 "사진" 앱으로 보내기 쉬움)
-  try {
-    if (navigator?.share && navigator?.canShare) {
-      const can = navigator.canShare({ files: [file] });
-      if (can) {
-        await navigator.share({ files: [file], title: file.name || "photo" });
-        return;
-      }
-    }
-  } catch {
-    // ignore and fallback
-  }
-
-  // 2) 다운로드(공유 미지원/실패 시)
-  try {
-    const url = URL.createObjectURL(file);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = file.name || "photo.jpg";
-    a.rel = "noopener";
-    a.style.display = "none";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => {
-      try { URL.revokeObjectURL(url); } catch {}
-    }, 1500);
-    setFoot("사진 저장을 시작했어.");
-  } catch {
-    alert("사진 저장에 실패했어. (브라우저 제한일 수 있어)");
-  }
-}
-
-async function saveUrlToDevice(url, filename = "photo.jpg") {
-  if (!url) return;
-  try {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const blob = await res.blob();
-    const type = blob.type || "image/jpeg";
-    const ext = type.includes("png") ? "png" : type.includes("webp") ? "webp" : "jpg";
-    const safeName = String(filename || "photo").replace(/[\\/:*?\"<>|]/g, "_");
-    const finalName = safeName.toLowerCase().endsWith(`.${ext}`) ? safeName : `${safeName}.${ext}`;
-    const file = new File([blob], finalName, { type });
-    await saveFileToDevice(file);
-    return;
-  } catch (e) {
-    // CORS/권한 등으로 fetch가 막히는 경우가 있어 폴백 제공
-    try {
-      const a = document.createElement("a");
-      a.href = url;
-      a.rel = "noopener";
-      a.target = "_blank";
-      a.style.display = "none";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setFoot("브라우저 제한 때문에 새 창으로 열었어. 거기서 저장해줘.");
-    } catch {
-      alert("사진 저장에 실패했어. (브라우저 제한/CORS 가능성)");
-    }
-  }
-}
-
 modalClose?.addEventListener("click", closeModal);
-modalSave?.addEventListener("click", async () => {
-  if (!state.pending?.file) return;
-  await saveFileToDevice(state.pending.file);
-});
 modalReject?.addEventListener("click", closeModal);
 modalAccept?.addEventListener("click", async () => {
   if (!state.pending) return;
@@ -517,8 +455,8 @@ function viewerRoleOrder(sample) {
     // 농도는 사진 1장만: UI/뷰어에서는 항상 measurement 슬롯만 사용
     return ["measurement"];
   }
-  // 비산은 전/후(시작/완료)만 사용
-  return ["start", "end"];
+  // 비산은 기본 start/end + 단일/추가 사진 대응
+  return ["start", "end", "single"];
 }
 function buildViewerItemsForDate(dateISO) {
   const samples = state.samplesByDate.get(dateISO) || [];
@@ -671,24 +609,6 @@ async function renderViewer() {
 }
 
 viewerClose?.addEventListener("click", closeViewer);
-viewerSave?.addEventListener("click", async () => {
-  if (!state.viewer.open || !state.viewer.items.length) return;
-  const item = state.viewer.items[state.viewer.index];
-  if (!item) return;
-
-  // 가능한 경우 현재 표시 중인 URL을 사용(이미 resolve 됨)
-  let url = viewerImg?.getAttribute("src") || "";
-  if (!url) {
-    try {
-      url = await resolvePhotoUrl(item.storage_path, item.sample_id, item.role);
-    } catch {
-      url = "";
-    }
-  }
-
-  const base = `photo_${item.sample_id}_${item.role}`;
-  await saveUrlToDevice(url, base);
-});
 viewerPrev?.addEventListener("click", () => {
   if (!state.viewer.items.length) return;
   state.viewer.index = (state.viewer.index - 1 + state.viewer.items.length) % state.viewer.items.length;
@@ -967,7 +887,7 @@ async function nasFetchBlobUrl(relPath) {
   const url = joinUrl(NAS_GATEWAY_URL, `object/authenticated/${enc}`);
 
   const auth = await getNasAuthorization();
-  const resp = await fetchWithTimeoutRetry(url, { method: "GET", headers: auth ? { Authorization: auth } : undefined }, 15000, 1);
+  const resp = await fetch(url, { method: "GET", headers: auth ? { Authorization: auth } : undefined });
   if (!resp.ok) {
     const msg = await resp.text().catch(() => "");
     throw new Error(`NAS 파일 조회 실패 (${resp.status}): ${msg || "요청이 거부되었습니다."}`);
@@ -979,202 +899,7 @@ async function nasFetchBlobUrl(relPath) {
 /** =========================
  *  Thumbnails
  *  ========================= */
-
-const THUMB_MAX_CONCURRENCY = 4;
-const THUMB_RENDER_DEBOUNCE_MS = 120;
-
-let _renderTimer = null;
-function scheduleRender() {
-  if (_renderTimer) return;
-  _renderTimer = setTimeout(() => {
-    _renderTimer = null;
-    render();
-  }, THUMB_RENDER_DEBOUNCE_MS);
-}
-
-function cleanupThumbBlobs(samples) {
-  try {
-    for (const s of samples || []) {
-      const blobs = s?._thumbBlobUrl;
-      if (!blobs) continue;
-      for (const k of Object.keys(blobs)) {
-        const u = blobs[k];
-        if (typeof u === "string" && u.startsWith("blob:")) {
-          try {
-            URL.revokeObjectURL(u);
-          } catch {}
-        }
-      }
-      s._thumbBlobUrl = {};
-    }
-  } catch {}
-}
-
-function _setThumbUrl(sample, role, url, expMs) {
-  sample._thumbUrl ||= {};
-  sample._thumbExp ||= {};
-  sample._thumbBlobUrl ||= {};
-
-  const prevBlob = sample._thumbBlobUrl[role];
-  if (prevBlob && prevBlob !== url && typeof prevBlob === "string" && prevBlob.startsWith("blob:")) {
-    try {
-      URL.revokeObjectURL(prevBlob);
-    } catch {}
-  }
-
-  sample._thumbUrl[role] = url;
-  if (typeof expMs === "number") sample._thumbExp[role] = expMs;
-
-  if (typeof url === "string" && url.startsWith("blob:")) {
-    sample._thumbBlobUrl[role] = url;
-  } else {
-    delete sample._thumbBlobUrl[role];
-  }
-}
-
-// 네트워크 없는(저렴한) 썸네일 프리셋: http / nas public만 세팅
-function primeThumbUrl(sample, role) {
-  const path = sample._photoPath?.[role];
-  if (!path) return;
-
-  if (isHttpUrl(path)) {
-    _setThumbUrl(sample, role, path, Date.now() + 365 * 24 * 3600 * 1000);
-    return;
-  }
-
-  if (typeof path === "string" && path.startsWith("nas:") && NAS_FILE_BASE) {
-    const rel = path.slice(4).replace(/^\//, "");
-    _setThumbUrl(sample, role, joinUrl(NAS_FILE_BASE, rel), Date.now() + 365 * 24 * 3600 * 1000);
-  }
-}
-
-function updateThumbInDom(sampleId, role, url) {
-  try {
-    const sel = `.thumbMini[data-sid="${sampleId}"][data-role="${role}"]`;
-    const wrap = document.querySelector(sel);
-    if (!wrap) return false;
-
-    // placeholder -> img
-    const existing = wrap.querySelector("img");
-    if (existing) {
-      existing.src = url;
-      return true;
-    }
-
-    wrap.innerHTML = "";
-    const dateISO = wrap.getAttribute("data-date") || state.activeDate;
-    wrap.appendChild(
-      el("img", {
-        src: url,
-        alt: roleLabel(role),
-        onclick: () => openViewerAt(dateISO, sampleId, role),
-      })
-    );
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function fetchWithTimeoutRetry(url, init, timeoutMs = 15000, retries = 1) {
-  let lastErr;
-  const tries = Math.max(1, (retries ?? 0) + 1);
-
-  for (let i = 0; i < tries; i++) {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), timeoutMs);
-    try {
-      const resp = await fetch(url, { ...(init || {}), signal: ctrl.signal });
-      clearTimeout(t);
-      return resp;
-    } catch (e) {
-      clearTimeout(t);
-      lastErr = e;
-      // 타임아웃/네트워크 흔들림 대응: 짧게 텀
-      await new Promise((r) => setTimeout(r, 200));
-    }
-  }
-  throw lastErr;
-}
-
-let _thumbQueue = [];
-let _thumbRunning = 0;
-
-function _getSampleById(id) {
-  if (state.sampleById && typeof state.sampleById.get === "function") {
-    const v = state.sampleById.get(id);
-    if (v) return v;
-  }
-  // fallback
-  for (const arr of state.samplesByDate?.values?.() || []) {
-    for (const s of arr || []) if (s?.id === id) return s;
-  }
-  return null;
-}
-
-function queueThumb(sampleId, role, opts) {
-  const s = _getSampleById(sampleId);
-  if (!s) return;
-
-  s._thumbQueued ||= {};
-  if (s._thumbLoading?.[role] || s._thumbQueued[role]) return;
-  s._thumbQueued[role] = true;
-
-  _thumbQueue.push({ sampleId, role, opts: opts || {} });
-  pumpThumbQueue();
-}
-
-function pumpThumbQueue() {
-  while (_thumbRunning < THUMB_MAX_CONCURRENCY && _thumbQueue.length) {
-    const task = _thumbQueue.shift();
-    _thumbRunning += 1;
-
-    (async () => {
-      try {
-        const s = _getSampleById(task.sampleId);
-        if (s) await ensureThumbUrl(s, task.role, task.opts);
-      } catch (e) {
-        console.warn("썸네일 로딩 실패:", e);
-      } finally {
-        const s = _getSampleById(task.sampleId);
-        if (s && s._thumbQueued) s._thumbQueued[task.role] = false;
-        _thumbRunning -= 1;
-        pumpThumbQueue();
-      }
-    })();
-  }
-}
-
-let _thumbObserver = null;
-function observeThumb(elm, sampleId, role) {
-  try {
-    if (typeof IntersectionObserver === "undefined") {
-      queueThumb(sampleId, role);
-      return;
-    }
-    if (!_thumbObserver) {
-      _thumbObserver = new IntersectionObserver(
-        (entries) => {
-          for (const ent of entries) {
-            if (!ent.isIntersecting) continue;
-            const el = ent.target;
-            _thumbObserver.unobserve(el);
-
-            const sid = el.getAttribute("data-sid");
-            const r = el.getAttribute("data-role");
-            if (sid && r) queueThumb(sid, r);
-          }
-        },
-        { root: null, threshold: 0.05 }
-      );
-    }
-    _thumbObserver.observe(elm);
-  } catch {
-    queueThumb(sampleId, role);
-  }
-}
-
-async function ensureThumbUrl(sample, role, opts) {
+function ensureThumbUrl(sample, role) {
   const path = sample._photoPath?.[role];
   if (!path) return;
 
@@ -1182,53 +907,69 @@ async function ensureThumbUrl(sample, role, opts) {
   sample._thumbExp ||= {};
   sample._thumbLoading ||= {};
 
+  // full URL이면 그대로
+  if (isHttpUrl(path)) {
+    sample._thumbUrl[role] = path;
+    sample._thumbExp[role] = Date.now() + 365 * 24 * 3600 * 1000;
+    return;
+  }
+
+  // nas: 접두
+  if (typeof path === "string" && path.startsWith("nas:")) {
+    const rel = path.slice(4).replace(/^\//, "");
+
+    const now = Date.now();
+    const exp = sample._thumbExp[role] || 0;
+    if (sample._thumbUrl[role] && exp > now + 15_000) return;
+
+    if (sample._thumbLoading[role]) return;
+    sample._thumbLoading[role] = true;
+
+    (async () => {
+      try {
+        // 1) public URL로 먼저 세팅 (NAS가 public 허용이면 이걸로 끝)
+        if (NAS_FILE_BASE) {
+          sample._thumbUrl[role] = joinUrl(NAS_FILE_BASE, rel);
+          sample._thumbExp[role] = Date.now() + 365 * 24 * 3600 * 1000;
+        }
+
+        // 2) public이 막혀있으면 img는 깨짐 → Authorization으로 blob URL 생성해서 교체
+        const auth = await getNasAuthorization();
+        if (auth) {
+          const blobUrl = await nasFetchBlobUrl(rel);
+          sample._thumbUrl[role] = blobUrl;
+          sample._thumbExp[role] = Date.now() + 365 * 24 * 3600 * 1000;
+        }
+      } catch (e) {
+        console.warn("NAS 썸네일 생성 실패:", e);
+      } finally {
+        sample._thumbLoading[role] = false;
+        render();
+      }
+    })();
+
+    return;
+  }
+
   const now = Date.now();
   const exp = sample._thumbExp[role] || 0;
-  if (sample._thumbUrl[role] && exp > now + 15_000 && !opts?.force) return;
+  if (sample._thumbUrl[role] && exp > now + 15_000) return;
 
   if (sample._thumbLoading[role]) return;
   sample._thumbLoading[role] = true;
 
-  try {
-    // full URL이면 그대로
-    if (isHttpUrl(path)) {
-      const url = opts?.force ? withCacheBust(path, Date.now()) : path;
-      _setThumbUrl(sample, role, url, Date.now() + 365 * 24 * 3600 * 1000);
-      updateThumbInDom(sample.id, role, url);
-      return;
+  (async () => {
+    try {
+      const url = await getSignedUrl(path);
+      sample._thumbUrl[role] = url;
+      sample._thumbExp[role] = Date.now() + SIGNED_URL_TTL_SEC * 1000;
+    } catch (e) {
+      console.error("Signed URL 생성 실패:", e);
+    } finally {
+      sample._thumbLoading[role] = false;
+      render();
     }
-
-    // nas: 접두 (기본은 public URL만, 실패 시 onerror에서 force blob)
-    if (typeof path === "string" && path.startsWith("nas:")) {
-      const rel = path.slice(4).replace(/^\//, "");
-
-      if (NAS_FILE_BASE) {
-        const pub0 = joinUrl(NAS_FILE_BASE, rel);
-        const pub = opts?.force ? withCacheBust(pub0, Date.now()) : pub0;
-        _setThumbUrl(sample, role, pub, Date.now() + 365 * 24 * 3600 * 1000);
-        updateThumbInDom(sample.id, role, pub);
-      }
-
-      if (!opts?.nasForceBlob) return;
-
-      const auth = await getNasAuthorization();
-      if (auth) {
-        const blobUrl = await nasFetchBlobUrl(rel);
-        _setThumbUrl(sample, role, blobUrl, Date.now() + 365 * 24 * 3600 * 1000);
-        if (!updateThumbInDom(sample.id, role, blobUrl)) scheduleRender();
-      }
-      return;
-    }
-
-    // Supabase Storage signed URL
-    const url = await getSignedUrl(path);
-    _setThumbUrl(sample, role, url, Date.now() + SIGNED_URL_TTL_SEC * 1000);
-    if (!updateThumbInDom(sample.id, role, url)) scheduleRender();
-  } catch (e) {
-    console.error("썸네일 생성 실패:", e);
-  } finally {
-    sample._thumbLoading[role] = false;
-  }
+  })();
 }
 
 /** =========================
@@ -1237,8 +978,6 @@ async function ensureThumbUrl(sample, role, opts) {
 async function uploadAndBindPhoto(sample, role, file) {
   sample._photoState ||= {};
   sample._photoPath ||= {};
-  const prevPath = sample._photoPath[role] || null;
-
   sample._photoState[role] = "uploading";
   render();
 
@@ -1278,29 +1017,12 @@ async function uploadAndBindPhoto(sample, role, file) {
     sample._photoState[role] = "done";
     sample._photoPath[role] = row?.storage_path || storedPath;
 
-    // 썸네일은 브라우저 캐시 때문에 이전 이미지가 남는 경우가 있어 강제 갱신
-    ensureThumbUrl(sample, role, { force: true });
-
-    // 기존 사진은 교체 시 제거 (best-effort)
-    try {
-      const nextPath = sample._photoPath[role] || null;
-      if (prevPath && nextPath && String(prevPath) !== String(nextPath)) {
-        const p = String(prevPath);
-        // NAS(또는 URL) 삭제
-        if (isHttpUrl(p) || p.startsWith("nas:")) {
-          await nasDeleteByPathOrUrl(p);
-        } else {
-          // Supabase Storage 삭제
-          await supabase.storage.from(BUCKET).remove([p]).catch(() => null);
-        }
-      }
-    } catch {
-      // ignore
-    }
-
+    ensureThumbUrl(sample, role);
     setFoot("업로드가 완료되었습니다.");
     render();
   } catch (e) {
+    initDone = true;
+    clearTimeout(initWatch);
     console.error(e);
     sample._photoState[role] = "failed";
     setFoot(`업로드에 실패했습니다: ${e?.message || e}`);
@@ -1386,6 +1108,8 @@ async function deleteSample(sample) {
     setFoot("삭제가 완료되었습니다.");
     await loadJob(state.job);
   } catch (e) {
+    initDone = true;
+    clearTimeout(initWatch);
     console.error(e);
     setFoot(`삭제에 실패했습니다: ${e?.message || e}`);
     alert(e?.message || String(e));
@@ -1400,11 +1124,13 @@ async function deleteJobAndRelated(job) {
     setFoot("현장 삭제를 진행 중입니다...");
 
     // 1) load samples
-    const samples = await fetchSamples(job.id);
-
-  state.sampleById = new Map((samples || []).map((s) => [s.id, s]));
-
-  state.sampleById = new Map((samples || []).map((s) => [s.id, s]));
+    let samples = [];
+  try {
+    samples = await fetchSamples(job.id);
+  } catch (e) {
+    setFoot(`시료 목록 불러오기 실패: ${e?.message || e} (${netHintMessage(e)})`);
+    throw e;
+  }
     const sampleIds = (samples || []).map((s) => s.id);
 
     // 2) photos
@@ -1444,6 +1170,8 @@ async function deleteJobAndRelated(job) {
     await loadJobs();
     render();
   } catch (e) {
+    initDone = true;
+    clearTimeout(initWatch);
     console.error(e);
     setFoot(`현장 삭제에 실패했습니다: ${e?.message || e}`);
     alert(e?.message || String(e));
@@ -1463,21 +1191,28 @@ async function loadSession() {
 
 async function loadCompanies() {
   setFoot("회사 목록을 불러오는 중입니다...");
-  state.companies = await fetchCompanies();
+  try {
+    state.companies = await fetchCompanies();
+  } catch (e) {
+    setFoot(`회사 목록 불러오기 실패: ${e?.message || e} (${netHintMessage(e)})`);
+    throw e;
+  }
   setFoot("준비되었습니다.");
 }
 
 async function loadJobs() {
   if (!state.company || !state.mode) return;
   setFoot("현장 목록을 불러오는 중입니다...");
-  state.jobs = await fetchJobs(state.company.id, state.mode);
+  try {
+    state.jobs = await fetchJobs(state.company.id, state.mode);
+  } catch (e) {
+    setFoot(`현장 목록 불러오기 실패: ${e?.message || e} (${netHintMessage(e)})`);
+    throw e;
+  }
   setFoot("준비되었습니다.");
 }
 
 async function loadJob(job) {
-  // 기존 현장 썸네일 blob 정리(메모리 누수 방지)
-  cleanupThumbBlobs(Array.from(state.sampleById?.values?.() || []));
-
   state.job = job;
   state.samplesByDate = new Map();
   state.dates = [];
@@ -1487,7 +1222,13 @@ async function loadJob(job) {
   state.addTime = "";
 
   setFoot("시료 목록을 불러오는 중입니다...");
-  const samples = await fetchSamples(job.id);
+  let samples = [];
+  try {
+    samples = await fetchSamples(job.id);
+  } catch (e) {
+    setFoot(`시료 목록 불러오기 실패: ${e?.message || e} (${netHintMessage(e)})`);
+    throw e;
+  }
 
   const dates = Array.from(new Set(samples.map((s) => s.measurement_date))).sort();
   state.dates = dates;
@@ -1519,7 +1260,7 @@ async function loadJob(job) {
 
     s._photoState[role] = p.state === "failed" ? "failed" : "done";
     s._photoPath[role] = p.storage_path;
-    primeThumbUrl(s, role);
+    ensureThumbUrl(s, role);
   }
 
   // 날짜가 없으면 오늘을 탭으로 만들어서 추가 UX
@@ -1671,113 +1412,6 @@ function renderAuth() {
   root.appendChild(card);
 }
 
-
-/** ===== Swipe (left to delete) ===== */
-function createSwipeRow({ content, onDelete, onOpen, deleteText = "삭제", ignoreInteractive = true }) {
-  const wrap = el("div", { class: "swipeRow" });
-  const actions = el("div", { class: "swipeActions" }, [
-    el("button", {
-      class: "swipeDeleteBtn",
-      text: deleteText,
-      onclick: (ev) => {
-        ev.stopPropagation();
-        if (typeof onDelete === "function") onDelete();
-      },
-      type: "button",
-    }),
-  ]);
-
-  const contentWrap = el("div", { class: "swipeContent" }, [content]);
-
-  wrap.appendChild(actions);
-  wrap.appendChild(contentWrap);
-
-  const OPEN_X = -92;
-  const THRESH_OPEN = OPEN_X / 2; // -46
-  let isOpen = false;
-  let dragging = false;
-  let startX = 0;
-  let startY = 0;
-  let baseX = 0;
-  let lastX = 0;
-  let justDragged = false;
-
-  function applyX(x) {
-    lastX = x;
-    contentWrap.style.transform = `translateX(${x}px)`;
-    contentWrap.dataset.x = String(x);
-  }
-  function setOpen(v) {
-    isOpen = !!v;
-    wrap.classList.toggle("open", isOpen);
-    contentWrap.style.transition = "transform .15s ease";
-    applyX(isOpen ? OPEN_X : 0);
-    setTimeout(() => { contentWrap.style.transition = ""; }, 180);
-  }
-
-  // click behavior: open action -> close, else onOpen
-  contentWrap.addEventListener("click", (ev) => {
-    if (justDragged) return;
-    if (isOpen) {
-      ev.stopPropagation();
-      setOpen(false);
-      return;
-    }
-    if (typeof onOpen === "function") onOpen(ev);
-  });
-
-  contentWrap.addEventListener("pointerdown", (ev) => {
-    if (ignoreInteractive) {
-      const t = ev.target;
-      if (t && t.closest && t.closest("button,input,select,textarea,a,label")) return;
-    }
-    startX = ev.clientX;
-    startY = ev.clientY;
-    baseX = isOpen ? OPEN_X : 0;
-    dragging = false;
-    justDragged = false;
-    contentWrap.setPointerCapture(ev.pointerId);
-  });
-
-  contentWrap.addEventListener("pointermove", (ev) => {
-    const dx = ev.clientX - startX;
-    const dy = ev.clientY - startY;
-
-    if (!dragging) {
-      if (Math.abs(dx) < 7) return;
-      if (Math.abs(dx) <= Math.abs(dy) + 2) return; // keep scroll
-      dragging = true;
-      wrap.classList.add("dragging");
-      contentWrap.style.transition = "none";
-    }
-
-    // dragging
-    let x = baseX + dx;
-    if (x > 0) x = 0;
-    if (x < OPEN_X) x = OPEN_X;
-    applyX(x);
-    if (ev.cancelable) ev.preventDefault();
-    ev.stopPropagation();
-  });
-
-  function endDrag() {
-    if (!dragging) return;
-    dragging = false;
-    wrap.classList.remove("dragging");
-    justDragged = true;
-    setTimeout(() => { justDragged = false; }, 0);
-
-    contentWrap.style.transition = "";
-    setOpen(lastX < THRESH_OPEN);
-  }
-
-  contentWrap.addEventListener("pointerup", endDrag);
-  contentWrap.addEventListener("pointercancel", endDrag);
-
-  return wrap;
-}
-
-
 /** ===== Company ===== */
 function renderCompanySelect() {
   const list = el("div", { class: "list" });
@@ -1786,28 +1420,29 @@ function renderCompanySelect() {
     list.appendChild(el("div", { class: "card", text: "회사 목록이 비어 있습니다." }));
   } else {
     for (const c of state.companies) {
-      const item = el("div", {
-        class: "item clickable",
-        onclick: async () => {
-          state.company = c;
-          state.mode = null;
-          state.job = null;
-          await loadJobs().catch(() => null);
-          render();
-        },
-      }, [
-        el("div", {}, [
-          el("div", { class: "item-title", text: c.name }),
-        ]),
-        el("div", { class: "chev", text: "›" }),
-      ]);
-
-      list.appendChild(item);
+      list.appendChild(
+        el("div", { class: "item" }, [
+          el("div", {}, [
+            el("div", { class: "item-title", text: c.name }),
+          ]),
+          el("button", {
+            class: "btn primary",
+            text: "선택",
+            onclick: async () => {
+              state.company = c;
+              state.mode = null;
+              state.job = null;
+              await loadJobs().catch(() => null);
+              render();
+            },
+          }),
+        ])
+      );
     }
   }
 
   root.appendChild(el("div", { class: "card" }, [
-    el("div", { class: "label sectionLabel", text: "회사 목록" }),
+    el("div", { class: "label", text: "회사 선택" }),
     list,
   ]));
 }
@@ -1815,32 +1450,28 @@ function renderCompanySelect() {
 /** ===== Mode ===== */
 function renderModeSelect() {
   const wrap = el("div", { class: "card" }, [
-    el("div", { class: "label", text: "업무 선택" }),
-    el("div", { class: "choiceGrid" }, [
+    el("div", { class: "label", text: `업무 선택 · ${state.company?.name || ""}` }),
+    el("div", { class: "tabs", style: "margin-top:10px;" }, [
       el("button", {
-        class: "choiceCard",
-        type: "button",
+        class: "tab" + (state.mode === "density" ? " active" : ""),
+        text: "농도",
         onclick: async () => {
           state.mode = "density";
           state.job = null;
           await loadJobs();
           render();
         },
-      }, [
-        el("div", { class: "choiceTitle", text: "농도" }),
-      ]),
+      }),
       el("button", {
-        class: "choiceCard",
-        type: "button",
+        class: "tab" + (state.mode === "scatter" ? " active" : ""),
+        text: "비산",
         onclick: async () => {
           state.mode = "scatter";
           state.job = null;
           await loadJobs();
           render();
         },
-      }, [
-        el("div", { class: "choiceTitle", text: "비산" }),
-      ]),
+      }),
     ]),
   ]);
 
@@ -1863,16 +1494,6 @@ function renderJobSelect() {
       try {
         const project_name = safeText(pj.value);
         if (!project_name) throw new Error("현장명을 입력해 주세요.");
-
-        // 중복 현장명 방지(같은 회사 + 같은 업무 내에서만)
-        const _normPj = (s) => String(s ?? '').trim().replace(/\s+/g, ' ');
-        const _pjKey = _normPj(project_name);
-        const _dup = (state.jobs || []).some((j) => {
-          if (j?.mode && j.mode !== state.mode) return false;
-          if (j?.company_id && String(j.company_id) !== String(state.company.id)) return false;
-          return _normPj(j?.project_name) === _pjKey;
-        });
-        if (_dup) throw new Error('같은 현장명은 중복될 수 없습니다.');
 
         setFoot("현장을 생성 중입니다...");
         const job = await createJob({
@@ -1915,21 +1536,25 @@ function renderJobSelect() {
     for (const j of state.jobs) {
       const sub = [safeText(j.address), safeText(j.contractor)].filter(Boolean).join(" · ");
 
-      const content = el("div", { class: "item clickable" }, [
-        el("div", {}, [
-          el("div", { class: "item-title", text: safeText(j.project_name, "(이름없음)") }),
-          el("div", { class: "item-sub", text: sub || `생성: ${String(j.created_at || "").slice(0, 10)}` }),
-        ]),
-        el("div", { class: "chev", text: "›" }),
-      ]);
-
       list.appendChild(
-        createSwipeRow({
-          content,
-          onOpen: () => loadJob(j),
-          onDelete: () => deleteJobAndRelated(j),
-          ignoreInteractive: false,
-        })
+        el("div", { class: "item" }, [
+          el("div", {}, [
+            el("div", { class: "item-title", text: safeText(j.project_name, "(이름없음)") }),
+            el("div", { class: "item-sub", text: sub || `생성: ${String(j.created_at || "").slice(0, 10)}` }),
+          ]),
+          el("div", { class: "row", style: "gap:8px;" }, [
+            el("button", {
+              class: "btn small",
+              text: "삭제",
+              onclick: () => deleteJobAndRelated(j),
+            }),
+            el("button", {
+              class: "btn primary small",
+              text: "열기",
+              onclick: () => loadJob(j),
+            }),
+          ]),
+        ])
       );
     }
   }
@@ -2103,7 +1728,9 @@ function renderJobWork() {
                 setFoot(`저장 실패: ${e?.message || e}`);
               }
             },
-          }),        ]),
+          }),
+          el("button", { class: "btn small", text: "삭제", onclick: () => deleteSample(s) }),
+        ]),
       ]),
     ]);
 
@@ -2113,33 +1740,19 @@ function renderJobWork() {
       const status = s._photoState?.[role] || "";
       const dot = el("div", { class: dotClass(status) });
 
-      const thumb = el("div", {
-        class: "thumbMini",
-        title: roleLabel(role),
-        "data-sid": s.id,
-        "data-role": role,
-        "data-date": dateISO,
-      });
-
+      const thumb = el("div", { class: "thumbMini", title: roleLabel(role) });
       const url = s._thumbUrl?.[role];
       if (url) {
-        const img = el("img", {
-          src: url,
-          alt: roleLabel(role),
-          onclick: () => openViewerAt(dateISO, s.id, role),
-          onerror: () => {
-            // NAS public이 막혀있을 때만 blob fallback
-            const p = s._photoPath?.[role];
-            if (typeof p === "string" && p.startsWith("nas:")) {
-              queueThumb(s.id, role, { nasForceBlob: true, force: true });
-            }
-          },
-        });
-        thumb.appendChild(img);
+        thumb.appendChild(
+          el("img", {
+            src: url,
+            alt: roleLabel(role),
+            onclick: () => openViewerAt(dateISO, s.id, role),
+          })
+        );
       } else {
         thumb.appendChild(el("div", { text: roleLabel(role) }));
-        // 화면에 들어온 썸네일부터만 로딩(요청 폭탄 방지)
-        if (s._photoPath?.[role]) observeThumb(thumb, s.id, role);
+        ensureThumbUrl(s, role);
       }
 
       const btns = el("div", { class: "slotBtns" }, [
@@ -2156,48 +1769,109 @@ function renderJobWork() {
       );
     }
 
-    const content = el("div", { class: "sampleRow" }, [left, right]);
-    root.appendChild(createSwipeRow({ content, onDelete: () => deleteSample(s), ignoreInteractive: true }));
+    root.appendChild(el("div", { class: "sampleRow" }, [left, right]));
   }
 }
+
 
 /** =========================
  *  Bootstrap
  *  ========================= */
-(async function boot() {
+
+// PWA(홈 화면 실행)에서 조용히 멈추는 케이스(무한로딩처럼 보임) 대비:
+// - 런타임 에러/Promise rejection을 footStatus에 표시
+// - 초기화가 오래 걸리면(네트워크 hang 등) watchdog으로 탈출 힌트 제공
+let __lastFatalShown = 0;
+function showFatal(msg) {
+  const now = Date.now();
+  if (now - __lastFatalShown < 1500) return;
+  __lastFatalShown = now;
+  setFoot(msg);
+  try { console.error(msg); } catch {}
+}
+
+window.addEventListener('error', (ev) => {
+  const m = ev?.error?.message || ev?.message || '스크립트 오류';
+  showFatal(`오류: ${m}`);
+});
+window.addEventListener('unhandledrejection', (ev) => {
+  const r = ev?.reason;
+  const m = r?.message || String(r || 'Promise 오류');
+  showFatal(`오류: ${m}`);
+});
+
+// iOS/Safari BFCache 복귀 시 상태가 꼬이는 케이스 방지
+window.addEventListener('pageshow', (ev) => {
   try {
-    setFoot("초기화 중...");
+    if (ev && ev.persisted) location.reload();
+  } catch {}
+});
+
+window.addEventListener('online', () => setFoot('온라인 상태로 복귀했어.'));
+window.addEventListener('offline', () => setFoot('오프라인 상태야. 네트워크를 확인해줘.'));
+
+(async function boot() {
+  // 초기화가 네트워크 때문에 무한 대기처럼 보이는 문제 방지(홈 화면 무한로딩)
+  let initDone = false;
+  const initWatch = setTimeout(() => {
+    if (initDone) return;
+    setFoot(`초기화가 지연 중이야. ${netHintMessage(new Error('init-timeout'))}`);
+    // 화면은 일단 그려서(로그인/선택 화면) 사용자가 탈출할 수 있게 함
+    try { render(); } catch {}
+  }, 12000);
+
+  try {
+    setFoot('초기화 중...');
     await loadSession();
+
     if (state.user) {
-      await loadCompanies();
+      try {
+        await loadCompanies();
+      } catch (e) {
+        console.error(e);
+        setFoot(`회사 목록 로딩 실패: ${e?.message || e} / ${netHintMessage(e)}`);
+      }
     }
+
     render();
 
     // auth state change
     supabase.auth.onAuthStateChange(async (_event, session) => {
-      state.user = session?.user || null;
-      if (state.user) {
-        await loadCompanies().catch(() => null);
-      } else {
-        state.company = null;
-        state.mode = null;
-        state.job = null;
-        state.jobs = [];
-        state.companies = [];
+      try {
+        state.user = session?.user || null;
+        if (state.user) {
+          await loadCompanies().catch((e) => {
+            console.error(e);
+            setFoot(`회사 목록 로딩 실패: ${e?.message || e} / ${netHintMessage(e)}`);
+          });
+        } else {
+          state.company = null;
+          state.mode = null;
+          state.job = null;
+          state.jobs = [];
+          state.companies = [];
+        }
+        render();
+      } catch (e) {
+        console.error(e);
+        showFatal(`인증 상태 갱신 오류: ${e?.message || e}`);
       }
-      render();
     });
 
     // initial companies if logged in
     if (state.user && !state.companies.length) {
-      await loadCompanies();
+      await loadCompanies().catch((e) => {
+        console.error(e);
+        setFoot(`회사 목록 로딩 실패: ${e?.message || e} / ${netHintMessage(e)}`);
+      });
       render();
     }
-
-    // initial jobs if already have selection in memory (future)
   } catch (e) {
     console.error(e);
-    setFoot(`초기화 실패: ${e?.message || e}`);
-    render();
+    setFoot(`초기화 실패: ${e?.message || e} / ${netHintMessage(e)}`);
+    try { render(); } catch {}
+  } finally {
+    initDone = true;
+    clearTimeout(initWatch);
   }
 })();
