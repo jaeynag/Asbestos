@@ -84,7 +84,9 @@ const NAS_DELETE_URL = _trim(LS_DELETE || CFG_DELETE || "");
 
 async function getNasAuthorization() {
   // 우선순위: localStorage > APP_CONFIG > Supabase 세션(access_token)
-  const raw = _trim(LS_AUTH || CFG_AUTH);
+  // localStorage는 앱 실행 중에도 값이 바뀔 수 있어서(설정/개발자도구), 여기서는 매번 읽는다.
+  const rawLS = _trim(localStorage.getItem("NAS_AUTH_TOKEN"));
+  const raw = _trim(rawLS || CFG_AUTH);
   if (raw) {
     if (/^(Bearer|Basic)\s+/i.test(raw)) return raw;
     return `Bearer ${raw}`;
@@ -204,47 +206,7 @@ function joinUrl(base, path) {
 /** =========================
  *  Supabase
  *  ========================= */
-
-/** =========================
- *  Network hardening (PWA home-screen infinite loading guard)
- *  ========================= */
-const FETCH_TIMEOUT_MS = 15000; // 15s
-
-function fetchWithTimeout(input, init = {}) {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
-
-  // If caller provided a signal, abort our controller when theirs aborts
-  try {
-    if (init && init.signal) {
-      const s = init.signal;
-      if (s.aborted) ctrl.abort();
-      else s.addEventListener('abort', () => ctrl.abort(), { once: true });
-    }
-  } catch {
-    // ignore
-  }
-
-  const merged = { ...init, signal: ctrl.signal };
-  return fetch(input, merged).finally(() => clearTimeout(timer));
-}
-
-function isAbortError(e) {
-  return !!e && (e.name === 'AbortError' || String(e.message || '').toLowerCase().includes('abort'));
-}
-
-function netHintMessage(e) {
-  if (!navigator.onLine) return '네트워크가 오프라인이야. 데이터/와이파이 확인해줘.';
-  if (isAbortError(e)) return `네트워크가 느려서 요청이 ${Math.round(FETCH_TIMEOUT_MS/1000)}초 안에 끝나지 않았어. (새로고침 추천)`;
-  return '네트워크/CORS/서버 상태 때문에 로딩이 막혔을 수 있어.';
-}
-
-/** =========================
- *  Supabase
- *  ========================= */
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-  global: { fetch: fetchWithTimeout },
-});
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 /** =========================
  *  State
@@ -1021,8 +983,6 @@ async function uploadAndBindPhoto(sample, role, file) {
     setFoot("업로드가 완료되었습니다.");
     render();
   } catch (e) {
-    initDone = true;
-    clearTimeout(initWatch);
     console.error(e);
     sample._photoState[role] = "failed";
     setFoot(`업로드에 실패했습니다: ${e?.message || e}`);
@@ -1108,8 +1068,6 @@ async function deleteSample(sample) {
     setFoot("삭제가 완료되었습니다.");
     await loadJob(state.job);
   } catch (e) {
-    initDone = true;
-    clearTimeout(initWatch);
     console.error(e);
     setFoot(`삭제에 실패했습니다: ${e?.message || e}`);
     alert(e?.message || String(e));
@@ -1124,13 +1082,7 @@ async function deleteJobAndRelated(job) {
     setFoot("현장 삭제를 진행 중입니다...");
 
     // 1) load samples
-    let samples = [];
-  try {
-    samples = await fetchSamples(job.id);
-  } catch (e) {
-    setFoot(`시료 목록 불러오기 실패: ${e?.message || e} (${netHintMessage(e)})`);
-    throw e;
-  }
+    const samples = await fetchSamples(job.id);
     const sampleIds = (samples || []).map((s) => s.id);
 
     // 2) photos
@@ -1170,8 +1122,6 @@ async function deleteJobAndRelated(job) {
     await loadJobs();
     render();
   } catch (e) {
-    initDone = true;
-    clearTimeout(initWatch);
     console.error(e);
     setFoot(`현장 삭제에 실패했습니다: ${e?.message || e}`);
     alert(e?.message || String(e));
@@ -1191,24 +1141,14 @@ async function loadSession() {
 
 async function loadCompanies() {
   setFoot("회사 목록을 불러오는 중입니다...");
-  try {
-    state.companies = await fetchCompanies();
-  } catch (e) {
-    setFoot(`회사 목록 불러오기 실패: ${e?.message || e} (${netHintMessage(e)})`);
-    throw e;
-  }
+  state.companies = await fetchCompanies();
   setFoot("준비되었습니다.");
 }
 
 async function loadJobs() {
   if (!state.company || !state.mode) return;
   setFoot("현장 목록을 불러오는 중입니다...");
-  try {
-    state.jobs = await fetchJobs(state.company.id, state.mode);
-  } catch (e) {
-    setFoot(`현장 목록 불러오기 실패: ${e?.message || e} (${netHintMessage(e)})`);
-    throw e;
-  }
+  state.jobs = await fetchJobs(state.company.id, state.mode);
   setFoot("준비되었습니다.");
 }
 
@@ -1222,13 +1162,7 @@ async function loadJob(job) {
   state.addTime = "";
 
   setFoot("시료 목록을 불러오는 중입니다...");
-  let samples = [];
-  try {
-    samples = await fetchSamples(job.id);
-  } catch (e) {
-    setFoot(`시료 목록 불러오기 실패: ${e?.message || e} (${netHintMessage(e)})`);
-    throw e;
-  }
+  const samples = await fetchSamples(job.id);
 
   const dates = Array.from(new Set(samples.map((s) => s.measurement_date))).sort();
   state.dates = dates;
@@ -1773,105 +1707,43 @@ function renderJobWork() {
   }
 }
 
-
 /** =========================
  *  Bootstrap
  *  ========================= */
-
-// PWA(홈 화면 실행)에서 조용히 멈추는 케이스(무한로딩처럼 보임) 대비:
-// - 런타임 에러/Promise rejection을 footStatus에 표시
-// - 초기화가 오래 걸리면(네트워크 hang 등) watchdog으로 탈출 힌트 제공
-let __lastFatalShown = 0;
-function showFatal(msg) {
-  const now = Date.now();
-  if (now - __lastFatalShown < 1500) return;
-  __lastFatalShown = now;
-  setFoot(msg);
-  try { console.error(msg); } catch {}
-}
-
-window.addEventListener('error', (ev) => {
-  const m = ev?.error?.message || ev?.message || '스크립트 오류';
-  showFatal(`오류: ${m}`);
-});
-window.addEventListener('unhandledrejection', (ev) => {
-  const r = ev?.reason;
-  const m = r?.message || String(r || 'Promise 오류');
-  showFatal(`오류: ${m}`);
-});
-
-// iOS/Safari BFCache 복귀 시 상태가 꼬이는 케이스 방지
-window.addEventListener('pageshow', (ev) => {
-  try {
-    if (ev && ev.persisted) location.reload();
-  } catch {}
-});
-
-window.addEventListener('online', () => setFoot('온라인 상태로 복귀했어.'));
-window.addEventListener('offline', () => setFoot('오프라인 상태야. 네트워크를 확인해줘.'));
-
 (async function boot() {
-  // 초기화가 네트워크 때문에 무한 대기처럼 보이는 문제 방지(홈 화면 무한로딩)
-  let initDone = false;
-  const initWatch = setTimeout(() => {
-    if (initDone) return;
-    setFoot(`초기화가 지연 중이야. ${netHintMessage(new Error('init-timeout'))}`);
-    // 화면은 일단 그려서(로그인/선택 화면) 사용자가 탈출할 수 있게 함
-    try { render(); } catch {}
-  }, 12000);
-
   try {
-    setFoot('초기화 중...');
+    setFoot("초기화 중...");
     await loadSession();
-
     if (state.user) {
-      try {
-        await loadCompanies();
-      } catch (e) {
-        console.error(e);
-        setFoot(`회사 목록 로딩 실패: ${e?.message || e} / ${netHintMessage(e)}`);
-      }
+      await loadCompanies();
     }
-
     render();
 
     // auth state change
     supabase.auth.onAuthStateChange(async (_event, session) => {
-      try {
-        state.user = session?.user || null;
-        if (state.user) {
-          await loadCompanies().catch((e) => {
-            console.error(e);
-            setFoot(`회사 목록 로딩 실패: ${e?.message || e} / ${netHintMessage(e)}`);
-          });
-        } else {
-          state.company = null;
-          state.mode = null;
-          state.job = null;
-          state.jobs = [];
-          state.companies = [];
-        }
-        render();
-      } catch (e) {
-        console.error(e);
-        showFatal(`인증 상태 갱신 오류: ${e?.message || e}`);
+      state.user = session?.user || null;
+      if (state.user) {
+        await loadCompanies().catch(() => null);
+      } else {
+        state.company = null;
+        state.mode = null;
+        state.job = null;
+        state.jobs = [];
+        state.companies = [];
       }
+      render();
     });
 
     // initial companies if logged in
     if (state.user && !state.companies.length) {
-      await loadCompanies().catch((e) => {
-        console.error(e);
-        setFoot(`회사 목록 로딩 실패: ${e?.message || e} / ${netHintMessage(e)}`);
-      });
+      await loadCompanies();
       render();
     }
+
+    // initial jobs if already have selection in memory (future)
   } catch (e) {
     console.error(e);
-    setFoot(`초기화 실패: ${e?.message || e} / ${netHintMessage(e)}`);
-    try { render(); } catch {}
-  } finally {
-    initDone = true;
-    clearTimeout(initWatch);
+    setFoot(`초기화 실패: ${e?.message || e}`);
+    render();
   }
 })();
