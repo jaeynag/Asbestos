@@ -1,4 +1,4 @@
-\// app.js (GitHub Pages web uploader)
+// app.js (GitHub Pages web uploader)
 // - UI: index.html + styles.css classes are kept
 // - Data: Supabase (Auth + PostgREST)
 // - Heavy files: NAS 업로드(권장) / Supabase Storage(예비)
@@ -61,12 +61,21 @@ function _isGithubIoHost() {
   }
 }
 
+// iOS Safari/PWA에서 localStorage 접근이 SecurityError로 터지는 케이스 방어
+function _lsGet(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
 // 우선순위: localStorage(개발/테스트) > window.APP_CONFIG(배포 설정) > 자동(커스텀 도메인에서는 현재 도메인)
-const LS_GATEWAY = _trim(localStorage.getItem("NAS_GATEWAY_URL"));
-const LS_UPLOAD = _trim(localStorage.getItem("NAS_UPLOAD_URL"));
-const LS_FILE_BASE = _trim(localStorage.getItem("NAS_FILE_BASE"));
-const LS_DELETE = _trim(localStorage.getItem("NAS_DELETE_URL"));
-const LS_AUTH = _trim(localStorage.getItem("NAS_AUTH_TOKEN"));
+const LS_GATEWAY = _trim(_lsGet("NAS_GATEWAY_URL"));
+const LS_UPLOAD = _trim(_lsGet("NAS_UPLOAD_URL"));
+const LS_FILE_BASE = _trim(_lsGet("NAS_FILE_BASE"));
+const LS_DELETE = _trim(_lsGet("NAS_DELETE_URL"));
+const LS_AUTH = _trim(_lsGet("NAS_AUTH_TOKEN"));
 
 const CFG_GATEWAY = _trim(APP_CONFIG.NAS_GATEWAY_URL);
 const CFG_UPLOAD = _trim(APP_CONFIG.NAS_UPLOAD_URL);
@@ -84,9 +93,7 @@ const NAS_DELETE_URL = _trim(LS_DELETE || CFG_DELETE || "");
 
 async function getNasAuthorization() {
   // 우선순위: localStorage > APP_CONFIG > Supabase 세션(access_token)
-  // localStorage는 앱 실행 중에도 값이 바뀔 수 있어서(설정/개발자도구), 여기서는 매번 읽는다.
-  const rawLS = _trim(localStorage.getItem("NAS_AUTH_TOKEN"));
-  const raw = _trim(rawLS || CFG_AUTH);
+  const raw = _trim(LS_AUTH || CFG_AUTH);
   if (raw) {
     if (/^(Bearer|Basic)\s+/i.test(raw)) return raw;
     return `Bearer ${raw}`;
@@ -99,34 +106,6 @@ async function getNasAuthorization() {
     // ignore
   }
   return "";
-}
-
-// --- Network robustness (PWA/iOS) ---
-const FETCH_TIMEOUT_MS = 15000;
-const BOOT_WATCHDOG_MS = 12000;
-
-function withTimeout(promise, ms, label) {
-  let t;
-  const timeout = new Promise((_, reject) => {
-    t = setTimeout(() => reject(new Error(`${label || '작업'} 타임아웃 (${ms}ms)`)), ms);
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
-}
-
-async function fetchWithTimeout(url, options = {}, ms = FETCH_TIMEOUT_MS) {
-  // AbortController가 가능한 환경이면 fetch 자체를 중단해서 '무한 pending'을 끊는다.
-  const hasAbort = typeof AbortController !== 'undefined' && !options.signal;
-  if (hasAbort) {
-    const ctl = new AbortController();
-    const t = setTimeout(() => ctl.abort(), ms);
-    try {
-      return await fetch(url, { ...options, signal: ctl.signal });
-    } finally {
-      clearTimeout(t);
-    }
-  }
-  // signal이 이미 있거나 AbortController가 없으면 레이스로만 방어(취소는 못 함)
-  return await withTimeout(fetch(url, options), ms, '네트워크 요청');
 }
 
 /** =========================
@@ -231,8 +210,6 @@ function joinUrl(base, path) {
   }
 }
 
-
-
 /** =========================
  *  Supabase
  *  ========================= */
@@ -249,6 +226,7 @@ const state = {
   jobs: [],
 
   companies: [],
+  companiesError: "",
 
   dates: [],
   activeDate: null,
@@ -272,6 +250,8 @@ const state = {
     objectUrl: null,
   },
 };
+
+let _authListenerBound = false;
 
 /** =========================
  *  DOM refs
@@ -302,7 +282,6 @@ const viewerClose = document.getElementById("viewerClose");
 const viewerPrev = document.getElementById("viewerPrev");
 const viewerNext = document.getElementById("viewerNext");
 const viewerZoom = document.getElementById("viewerZoom");
-
 
 /** =========================
  *  Header / menu
@@ -437,8 +416,6 @@ modalAccept?.addEventListener("click", async () => {
   closeModal();
   await uploadAndBindPhoto(sample, role, file);
 });
-
-
 
 /** =========================
  *  Viewer
@@ -618,8 +595,6 @@ viewerZoom?.addEventListener("click", () => {
   state.viewer.zoom = state.viewer.zoom === 1 ? 2 : 1;
   renderViewer();
 });
-
-
 
 /** =========================
  *  API
@@ -814,7 +789,7 @@ async function nasUpload(meta, file) {
   if (meta?.mode) fd.append("mode", String(meta.mode));
 
   const auth = await getNasAuthorization();
-  const resp = await fetchWithTimeout(NAS_UPLOAD_URL, { method: "POST", headers: auth ? { Authorization: auth } : undefined, body: fd });
+  const resp = await fetch(NAS_UPLOAD_URL, { method: "POST", headers: auth ? { Authorization: auth } : undefined, body: fd });
 
   const ct = resp.headers.get("content-type") || "";
   let js = null;
@@ -865,7 +840,7 @@ async function nasDeleteByPathOrUrl(storagePath) {
 
   try {
     const auth = await getNasAuthorization();
-    await fetchWithTimeout(NAS_DELETE_URL, { method: "POST", headers: auth ? { Authorization: auth } : undefined, body: fd });
+    await fetch(NAS_DELETE_URL, { method: "POST", headers: auth ? { Authorization: auth } : undefined, body: fd });
   } catch {
     // ignore
   }
@@ -884,7 +859,7 @@ async function nasFetchBlobUrl(relPath) {
   const url = joinUrl(NAS_GATEWAY_URL, `object/authenticated/${enc}`);
 
   const auth = await getNasAuthorization();
-  const resp = await fetchWithTimeout(url, { method: "GET", headers: auth ? { Authorization: auth } : undefined });
+  const resp = await fetch(url, { method: "GET", headers: auth ? { Authorization: auth } : undefined });
   if (!resp.ok) {
     const msg = await resp.text().catch(() => "");
     throw new Error(`NAS 파일 조회 실패 (${resp.status}): ${msg || "요청이 거부되었습니다."}`);
@@ -893,25 +868,6 @@ async function nasFetchBlobUrl(relPath) {
   return URL.createObjectURL(blob);
 }
 
-// nasFetchBlob: 저장/다운로드용 (blob 그대로 반환)
-async function nasFetchBlob(relPath) {
-  if (!NAS_GATEWAY_URL) throw new Error("NAS_GATEWAY_URL이 설정되지 않았습니다.");
-  const rel = String(relPath || "").replace(/^\/+/, "");
-  const enc = rel.split("/").map(encodeURIComponent).join("/");
-  const url = joinUrl(NAS_GATEWAY_URL, `object/authenticated/${enc}`);
-
-  const auth = await getNasAuthorization();
-  const resp = await fetchWithTimeout(url, { method: "GET", headers: auth ? { Authorization: auth } : undefined });
-  if (!resp.ok) {
-    const msg = await resp.text().catch(() => "");
-    throw new Error(`NAS 파일 조회 실패 (${resp.status}): ${msg || "요청이 거부되었습니다."}`);
-  }
-  return await resp.blob();
-}
-
-/** =========================
- *  Bulk download (ZIP)
- *  ========================= */
 /** =========================
  *  Thumbnails
  *  ========================= */
@@ -1194,9 +1150,16 @@ async function loadSession() {
 }
 
 async function loadCompanies() {
+  state.companiesError = "";
   setFoot("회사 목록을 불러오는 중입니다...");
-  state.companies = await fetchCompanies();
-  setFoot("준비되었습니다.");
+  try {
+    state.companies = await fetchCompanies();
+    setFoot("준비되었습니다.");
+  } catch (e) {
+    state.companies = [];
+    state.companiesError = e?.message || String(e);
+    setFoot(`회사 목록 불러오기 실패: ${state.companiesError}`);
+  }
 }
 
 async function loadJobs() {
@@ -1404,8 +1367,31 @@ function renderAuth() {
 function renderCompanySelect() {
   const list = el("div", { class: "list" });
 
+  const retryRow = el("div", { class: "row", style: "justify-content:flex-end; margin-top:10px;" }, [
+    el("button", {
+      class: "btn",
+      text: "회사 목록 새로고침",
+      onclick: async () => {
+        await loadCompanies();
+        render();
+      },
+    }),
+  ]);
+
+  if (state.companiesError) {
+    list.appendChild(
+      el("div", { class: "card" }, [
+        el("div", { class: "item-title", text: "회사 목록을 불러오지 못했습니다." }),
+        el("div", { class: "item-sub", text: state.companiesError }),
+      ])
+    );
+  }
+
   if (!state.companies.length) {
-    list.appendChild(el("div", { class: "card", text: "회사 목록이 비어 있습니다." }));
+    const msg = state.companiesError
+      ? "(새로고침을 눌러 다시 시도해줘)"
+      : `접근 허용된 회사가 없습니다. 관리자에게 권한 요청 필요\n(로그인 이메일: ${state.user?.email || ""})`;
+    list.appendChild(el("div", { class: "card", text: msg }));
   } else {
     for (const c of state.companies) {
       list.appendChild(
@@ -1431,6 +1417,7 @@ function renderCompanySelect() {
 
   root.appendChild(el("div", { class: "card" }, [
     el("div", { class: "label", text: "회사 선택" }),
+    retryRow,
     list,
   ]));
 }
@@ -1761,33 +1748,6 @@ function renderJobWork() {
   }
 }
 
-
-// --- Global guards (PWA/iOS에서 무한로딩처럼 보이는 케이스 방지) ---
-(function setupGlobalGuards() {
-  try {
-    window.addEventListener('pageshow', (e) => {
-      // iOS BFCache에서 복귀하면 JS 상태가 꼬여 무한로딩처럼 보일 수 있음
-      if (e && e.persisted) location.reload();
-    });
-
-    window.addEventListener('online', () => setFoot('온라인'));
-    window.addEventListener('offline', () => setFoot('오프라인: 네트워크를 확인하세요.'));
-
-    window.addEventListener('unhandledrejection', (ev) => {
-      const msg = ev?.reason?.message || String(ev?.reason || '알 수 없는 오류');
-      console.error('unhandledrejection', ev?.reason);
-      setFoot(`오류: ${msg}`);
-    });
-
-    window.addEventListener('error', (ev) => {
-      const msg = ev?.error?.message || ev?.message || '알 수 없는 오류';
-      console.error('error', ev?.error || ev);
-      setFoot(`오류: ${msg}`);
-    });
-  } catch {
-    // ignore
-  }
-})();
 /** =========================
  *  Bootstrap
  *  ========================= */
@@ -1795,22 +1755,17 @@ function renderJobWork() {
   let bootFinished = false;
   const watchdog = setTimeout(() => {
     if (!bootFinished) {
-      // 초기 네트워크가 끊겼거나 iOS에서 pending이 길어질 때 화면이 멈춘 것처럼 보이는 걸 방지
-      setFoot('초기화 지연: 네트워크 확인 후 다시 시도하세요.');
+      setFoot("초기화 지연: 네트워크/로그인 상태를 확인해줘.");
       try { render(); } catch {}
     }
   }, BOOT_WATCHDOG_MS);
 
-  try {
-    setFoot("초기화 중...");
-    render();
-    await withTimeout(loadSession(), FETCH_TIMEOUT_MS, '세션 초기화');
-    if (state.user) {
-      await withTimeout(loadCompanies(), FETCH_TIMEOUT_MS, '회사 목록');
-    }
-    render();
+  setFoot("초기화 중...");
+  render();
 
-    // auth state change
+  // auth state change (초기화 실패 여부와 무관하게 항상 바인딩)
+  if (!_authListenerBound) {
+    _authListenerBound = true;
     supabase.auth.onAuthStateChange(async (_event, session) => {
       state.user = session?.user || null;
       if (state.user) {
@@ -1821,25 +1776,24 @@ function renderJobWork() {
         state.job = null;
         state.jobs = [];
         state.companies = [];
+        state.companiesError = "";
       }
       render();
     });
+  }
 
-    // initial companies if logged in
-    if (state.user && !state.companies.length) {
-      await withTimeout(loadCompanies(), FETCH_TIMEOUT_MS, '회사 목록');
-      render();
+  try {
+    await withTimeout(loadSession(), FETCH_TIMEOUT_MS, "세션 초기화");
+    if (state.user) {
+      await withTimeout(loadCompanies(), FETCH_TIMEOUT_MS, "회사 목록");
     }
-
-    // initial jobs if already have selection in memory (future)
-
-    bootFinished = true;
-    clearTimeout(watchdog);
+    render();
   } catch (e) {
     console.error(e);
     setFoot(`초기화 실패: ${e?.message || e}`);
+    render();
+  } finally {
     bootFinished = true;
     clearTimeout(watchdog);
-    render();
   }
 })();
