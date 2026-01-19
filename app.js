@@ -20,6 +20,9 @@
 
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 
+// 디버그/로딩 상태 플래그 (모듈 로드 자체 확인용)
+try { if (typeof window !== 'undefined') window.__APP_JS_LOADED__ = true; } catch {}
+
 /** =========================
  *  Config
  *  ========================= */
@@ -89,6 +92,34 @@ const NAS_GATEWAY_URL = _normBase(LS_GATEWAY || CFG_GATEWAY || AUTO_GATEWAY);
 const NAS_UPLOAD_URL = _trim(LS_UPLOAD || CFG_UPLOAD || (NAS_GATEWAY_URL ? `${NAS_GATEWAY_URL}/upload` : ""));
 const NAS_FILE_BASE = _normBase(LS_FILE_BASE || CFG_FILE_BASE || (NAS_GATEWAY_URL ? `${NAS_GATEWAY_URL}/public` : ""));
 const NAS_DELETE_URL = _trim(LS_DELETE || CFG_DELETE || "");
+
+const FETCH_TIMEOUT_MS = 15000; // 초기 로딩/쿼리 타임아웃
+const BOOT_WATCHDOG_MS = 12000;  // 부팅 watchdog
+
+function withTimeout(promise, ms, label = '작업') {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const t = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(`${label} 시간 초과 (${Math.round(ms/1000)}s)`));
+    }, ms);
+
+    Promise.resolve(promise)
+      .then((v) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(t);
+        resolve(v);
+      })
+      .catch((e) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(t);
+        reject(e);
+      });
+  });
+}
 
 
 async function getNasAuthorization() {
@@ -1253,6 +1284,8 @@ function render() {
 
   // viewer overlay
   if (state.viewer.open) renderViewer();
+
+  try { if (typeof window !== 'undefined') window.__APP_DID_RENDER__ = true; } catch {}
 }
 
 /** ===== Auth ===== */
