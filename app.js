@@ -121,6 +121,16 @@ function withTimeout(promise, ms, label = '작업') {
   });
 }
 
+// 타임아웃이 나도 앱을 죽이지 않고 "지연"으로만 처리
+async function softTimeout(promise, ms, label = '작업') {
+  try {
+    const v = await withTimeout(promise, ms, label);
+    return { ok: true, value: v };
+  } catch (e) {
+    return { ok: false, error: e };
+  }
+}
+
 
 async function getNasAuthorization() {
   // 우선순위: localStorage > APP_CONFIG > Supabase 세션(access_token)
@@ -1816,10 +1826,21 @@ function renderJobWork() {
   }
 
   try {
-    await withTimeout(loadSession(), FETCH_TIMEOUT_MS, "세션 초기화");
-    if (state.user) {
-      await withTimeout(loadCompanies(), FETCH_TIMEOUT_MS, "회사 목록");
+    const sess = await softTimeout(loadSession(), FETCH_TIMEOUT_MS, "세션 초기화");
+    if (!sess.ok) {
+      console.warn(sess.error);
+      setFoot(`세션 초기화 지연: ${sess.error?.message || sess.error}`);
+      // auth listener가 나중에 세션을 가져올 수도 있으니 앱은 계속 진행
     }
+
+    if (state.user) {
+      const comps = await softTimeout(loadCompanies(), FETCH_TIMEOUT_MS, "회사 목록");
+      if (!comps.ok) {
+        console.warn(comps.error);
+        // loadCompanies 내부에서 에러 메시지/상태 처리함
+      }
+    }
+
     render();
   } catch (e) {
     console.error(e);
