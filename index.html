@@ -2,10 +2,10 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="color-scheme" content="light" />
   <title>Asbestos field photos</title>
-  <link rel="stylesheet" href="./styles.css?v=20260119-08" />
+  <link rel="stylesheet" href="./styles.css?v=20260119-10" />
   <link rel="icon" href="./favicon.ico" />
   <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
   <link rel="manifest" href="./manifest.json" />
@@ -13,6 +13,10 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Asbestos" />
+
+  <!-- module preload: 홈화면(PWA)에서 모듈 로드 실패 확률을 조금이라도 낮추기 -->
+  <link rel="modulepreload" href="./app.js?v=20260119-10" />
 
 </head>
 <body>
@@ -136,6 +140,7 @@
     };
   </script>
 
-  <script type="module" src="./app.js?v=20260119-08"></script>
+  <link rel="modulepreload" href="./app.js?v=20260119-10" />
+  <script type="module" src="./app.js?v=20260119-10"></script>
 </body>
 </html>
