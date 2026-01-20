@@ -180,6 +180,114 @@ function el(tag, attrs = {}, children = []) {
   return n;
 }
 
+function makeSwipeItem(contentEl, onDelete) {
+  const wrap = el("div", { class: "swipeItem" });
+  const actions = el("div", { class: "swipeActions" }, [
+    el("button", {
+      class: "swipeDeleteBtn",
+      text: "삭제",
+      onclick: () => {
+        try { wrap.classList.remove("open"); } catch {}
+        if (_openSwipeItem === wrap) _openSwipeItem = null;
+        onDelete();
+      },
+    }),
+  ]);
+
+  const content = el("div", { class: "swipeContent" }, [contentEl]);
+
+  // 터치 스와이프 (좌로만)
+  let startX = 0;
+  let startY = 0;
+  let dragging = false;
+  let started = false;
+  const maxX = 88;
+
+  const close = () => {
+    try { wrap.classList.remove("open"); } catch {}
+    content.style.transform = "translateX(0px)";
+    content.style.transition = "transform .15s ease";
+    if (_openSwipeItem === wrap) _openSwipeItem = null;
+  };
+
+  const open = () => {
+    if (_openSwipeItem && _openSwipeItem !== wrap) {
+      try { _openSwipeItem.classList.remove("open"); } catch {}
+      try {
+        const c = _openSwipeItem.querySelector(".swipeContent");
+        if (c) c.style.transform = "translateX(0px)";
+      } catch {}
+    }
+    _openSwipeItem = wrap;
+    try { wrap.classList.add("open"); } catch {}
+    content.style.transform = `translateX(-${maxX}px)`;
+    content.style.transition = "transform .15s ease";
+  };
+
+  const onTouchStart = (e) => {
+    const t = e.touches?.[0];
+    if (!t) return;
+    startX = t.clientX;
+    startY = t.clientY;
+    dragging = false;
+    started = true;
+    content.style.transition = "none";
+  };
+  const onTouchMove = (e) => {
+    if (!started) return;
+    const t = e.touches?.[0];
+    if (!t) return;
+    const dx = t.clientX - startX;
+    const dy = t.clientY - startY;
+
+    // 세로 스크롤 우선
+    if (!dragging) {
+      if (Math.abs(dx) < 8) return;
+      if (Math.abs(dx) < Math.abs(dy)) {
+        started = false;
+        content.style.transition = "transform .15s ease";
+        return;
+      }
+      dragging = true;
+    }
+
+    e.preventDefault();
+
+    const isOpen = wrap.classList.contains("open");
+    const base = isOpen ? -maxX : 0;
+    let x = base + dx;
+    if (x > 0) x = 0;
+    if (x < -maxX) x = -maxX;
+    content.style.transform = `translateX(${x}px)`;
+  };
+  const onTouchEnd = () => {
+    if (!started) return;
+    started = false;
+    const m = /translateX\((-?\d+(?:\.\d+)?)px\)/.exec(content.style.transform || "");
+    const x = m ? Number(m[1]) : 0;
+    if (x <= -maxX / 2) open();
+    else close();
+  };
+
+  content.addEventListener("touchstart", onTouchStart, { passive: true });
+  content.addEventListener("touchmove", onTouchMove, { passive: false });
+  content.addEventListener("touchend", onTouchEnd, { passive: true });
+  content.addEventListener("touchcancel", onTouchEnd, { passive: true });
+
+  // 열린 상태에서 내용 영역 터치 시 닫기
+  content.addEventListener("click", (e) => {
+    if (wrap.classList.contains("open")) {
+      // 삭제 버튼 클릭은 예외
+      if (e.target && e.target.closest && e.target.closest(".swipeDeleteBtn")) return;
+      close();
+    }
+  });
+
+  wrap.appendChild(actions);
+  wrap.appendChild(content);
+  return wrap;
+}
+
 function dotClass(status) {
   if (status === "uploading") return "dot blue blink";
   if (status === "done") return "dot green";
@@ -278,6 +386,9 @@ const state = {
     objectUrl: null,
   },
 };
+
+// 스와이프 삭제: 동시에 하나만 열리게
+let _openSwipeItem = null;
 
 /** =========================
  *  DOM refs
@@ -453,8 +564,8 @@ function viewerRoleOrder(sample) {
     // 농도는 사진 1장만: UI/뷰어에서는 항상 measurement 슬롯만 사용
     return ["measurement"];
   }
-  // 비산은 기본 start/end + 단일/추가 사진 대응
-  return ["start", "end", "single"];
+  // 비산은 start/end만 사용 (single 슬롯 사용 금지)
+  return ["start", "end"];
 }
 function buildViewerItemsForDate(dateISO) {
   const samples = state.samplesByDate.get(dateISO) || [];
@@ -1236,12 +1347,18 @@ async function loadJob(job) {
     const s = byId.get(p.sample_id);
     if (!s) continue;
 
-    // 농도는 UI에서 사진 1장만 쓰므로, 과거 데이터의 role=single 은 measurement 로 정규화한다.
+    // role 정규화
     const rawRole = p.role;
-    const role = (state.mode === "density" && rawRole === "single") ? "measurement" : rawRole;
+    let role = rawRole;
 
-    // 이미 measurement 가 있으면 single 은 무시(중복 슬롯 방지)
-    if (state.mode === "density" && rawRole === "single" && s._photoPath["measurement"]) continue;
+    // 농도는 UI에서 사진 1장만 쓰므로, 과거 데이터의 role=single 은 measurement 로 정규화
+    if (state.mode === "density" && rawRole === "single") role = "measurement";
+
+    // 비산은 single 슬롯을 쓰지 않으므로, 과거 데이터의 role=single 은 end로 흡수
+    if (state.mode === "scatter" && rawRole === "single") role = "end";
+
+    // 중복 슬롯 방지: 이미 동일 role이 있으면 무시
+    if (s._photoPath[role]) continue;
 
     s._photoState[role] = p.state === "failed" ? "failed" : "done";
     s._photoPath[role] = p.storage_path;
@@ -1536,7 +1653,14 @@ function renderJobSelect() {
             el("button", {
               class: "btn primary small",
               text: "열기",
-              onclick: () => loadJob(j),
+              onclick: async () => {
+                try {
+                  await loadJob(j);
+                } catch (e) {
+                  console.error(e);
+                  setFoot(e?.message || String(e));
+                }
+              },
             }),
           ]),
         ])
@@ -1670,8 +1794,14 @@ function renderJobWork() {
   }
 
   for (const s of samples) {
-  
-    const titleEl = el("div", { class: "sampleTitle", text: `P${s.p_index || "?"} · ${safeText(s.sample_location, "미입력")}` });
+    const isScatter = state.mode === "scatter";
+
+    // 농도: 타이틀에는 위치를 표시하지 않고(미입력 제거), 아래에서 입력
+    const titleText = isScatter
+      ? `P${s.p_index || "?"} · ${safeText(s.sample_location, "")}`
+      : `P${s.p_index || "?"}`;
+
+    const titleEl = el("div", { class: "sampleTitle", text: titleText });
 
     const saveSampleLocation = async (ev) => {
       const v = safeText(ev.target.value);
@@ -1679,7 +1809,9 @@ function renderJobWork() {
       try {
         await updateSampleFields(s.id, { sample_location: v });
         s.sample_location = v;
-        titleEl.textContent = `P${s.p_index || "?"} · ${safeText(v, "미입력")}`;
+        if (isScatter) {
+          titleEl.textContent = `P${s.p_index || "?"} · ${safeText(v, "")}`;
+        }
         setFoot("시료 위치가 저장되었습니다.");
       } catch (e) {
         console.error(e);
@@ -1706,20 +1838,25 @@ function renderJobWork() {
         el("div", { class: "metaLine" }, [
           el("span", { class: "label", text: ymdDots(s.measurement_date) }),
         ]),
-        el("div", { class: "metaLine", style: "flex-wrap:nowrap; gap:8px;" }, [
-          ...(state.mode === "scatter"
-            ? [el("span", { class: "label", text: safeText(s.sample_location, "미입력") })]
-            : [
+
+        // 농도: 위치 입력을 여기서
+        ...(!isScatter
+          ? [
+              el("div", { class: "metaLine" }, [
                 el("input", {
                   class: "input",
-                  style: "flex:1; min-width:160px; padding:8px 10px; font-size:13px;",
+                  style: "width:100%; padding:8px 10px; font-size:13px;",
                   value: safeText(s.sample_location),
                   placeholder: "시료 위치",
                   onchange: saveSampleLocation,
                   onblur: saveSampleLocation,
                 }),
               ]),
+            ]
+          : []),
 
+        // 측정시작시간
+        el("div", { class: "metaLine", style: "gap:8px;" }, [
           el("span", { class: "label", text: "측정시작시간" }),
           el("input", {
             class: "timeInput",
@@ -1729,7 +1866,6 @@ function renderJobWork() {
             onchange: saveStartTime,
             onblur: saveStartTime,
           }),
-          el("button", { class: "btn small", text: "삭제", onclick: () => deleteSample(s) }),
         ]),
       ]),
     ]);
@@ -1769,7 +1905,8 @@ function renderJobWork() {
       );
     }
 
-    root.appendChild(el("div", { class: "sampleRow" }, [left, right]));
+    const row = el("div", { class: "sampleRow" }, [left, right]);
+    root.appendChild(makeSwipeItem(row, () => deleteSample(s)));
   }
 }
 
