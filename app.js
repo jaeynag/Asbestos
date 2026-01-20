@@ -188,8 +188,21 @@ function formatFastApiDetail(detail) {
 }
 
 function setFoot(_msg) {
-  // 하단 알림문구 제거(요청사항)
-  return;
+  // 상단 고정 토스트로 표시 (스크롤 유발 방지)
+  try {
+    const bar = document.getElementById("footStatus");
+    if (!bar) return;
+    const msg = String(_msg ?? "").trim();
+    if (!msg) return;
+    bar.textContent = msg;
+    bar.classList.add("show");
+    clearTimeout(setFoot._t);
+    setFoot._t = setTimeout(() => {
+      try { bar.classList.remove("show"); } catch {}
+    }, 1600);
+  } catch {
+    // ignore
+  }
 }
 
 function normEmail(v) {
@@ -214,6 +227,37 @@ function el(tag, attrs = {}, children = []) {
   }
   for (const c of children || []) n.appendChild(c);
   return n;
+}
+
+// type=time 은 placeholder가 잘 안 먹어서, 값이 없을 때 '--:--' 오버레이를 띄운다.
+function makeTimeDial(value, onCommit) {
+  const inp = el("input", {
+    class: "timeInput",
+    type: "time",
+    value: safeText(value),
+  });
+  const ph = el("span", { class: "timePlaceholder", text: "--:--" });
+  const wrap = el("div", { class: "timeWrap" }, [inp, ph]);
+
+  let last = safeText(value);
+  const sync = () => {
+    ph.style.display = inp.value ? "none" : "block";
+  };
+  sync();
+
+  const commit = async () => {
+    const v = safeText(inp.value);
+    if (v === last) return;
+    last = v;
+    if (typeof onCommit === "function") await onCommit(v);
+  };
+
+  inp.addEventListener("focus", () => { ph.style.display = "none"; });
+  inp.addEventListener("blur", () => { sync(); commit(); });
+  inp.addEventListener("change", () => { sync(); commit(); });
+  inp.addEventListener("input", sync);
+
+  return { wrap, input: inp, setValue: (v) => { inp.value = safeText(v); last = safeText(v); sync(); } };
 }
 
 /** =========================
@@ -1621,8 +1665,19 @@ function renderAuth() {
         }
 
         // login
-        const { error } = await supabase.auth.signInWithPassword({ email: e, password: p });
+        const { data, error } = await supabase.auth.signInWithPassword({ email: e, password: p });
         if (error) throw error;
+        // iOS PWA/일부 환경에서 바로 다음 요청이 anon으로 나가서 "불러오기"가 비는 케이스 방지
+        if (data?.session?.access_token && data?.session?.refresh_token) {
+          try {
+            await supabase.auth.setSession({
+              access_token: data.session.access_token,
+              refresh_token: data.session.refresh_token,
+            });
+          } catch (e) {
+            console.warn("setSession after login failed:", e);
+          }
+        }
         await loadSession();
         await loadCompanies();
         render();
@@ -1893,14 +1948,13 @@ function renderJobWork() {
     inp.value = state.addLoc || "";
     locInput = inp;
   }
-  const timeInput = el("input", { class: "timeInput", placeholder: "시각(선택)", value: state.addTime || "" });
 
   const addSampleBtn = el("button", {
     class: "btn primary",
     text: "시료 추가",
     onclick: async () => {
       try {
-        const loc = safeText(locInput.value);
+        const loc = state.mode === "scatter" ? safeText(locInput.value) : "";
         const dateISO = state.activeDate || new Date().toISOString().slice(0, 10);
 
         setFoot("시료를 생성 중입니다...");
@@ -1908,13 +1962,6 @@ function renderJobWork() {
 
         // reload to get correct p_index & date lists
         await loadJob(job);
-
-        // time optional
-        const t = safeText(timeInput.value);
-        if (t) {
-          await updateSampleFields(newRow.id || newRow?.[0]?.id, { start_time: t });
-          await loadJob(job);
-        }
 
         setFoot("시료가 추가되었습니다.");
       } catch (e) {
@@ -1938,17 +1985,18 @@ function renderJobWork() {
     tabs,
     el("div", { class: "row", style: "margin-top:10px;" }, (() => {
       const cols = [];
-      cols.push(
-        el("div", { class: "col", style: "flex:1; min-width:240px;" }, [
-          el("div", { class: "label", text: state.mode === "scatter" ? ymdDots(state.activeDate) : `시료 추가 · ${ymdDots(state.activeDate)}` }),
-          locInput,
-        ])
-      );
-      if (state.mode !== "scatter") {
+      if (state.mode === "scatter") {
         cols.push(
-          el("div", { class: "col" }, [
-            el("div", { class: "label", text: "시각(선택)" }),
-            timeInput,
+          el("div", { class: "col", style: "flex:1; min-width:240px;" }, [
+            el("div", { class: "label", text: ymdDots(state.activeDate) }),
+            locInput,
+          ])
+        );
+      } else {
+        // 농도: 시료추가 시 위치/시간 입력 제거(아래 등록된 시료에서 입력)
+        cols.push(
+          el("div", { class: "col", style: "flex:1; min-width:240px;" }, [
+            el("div", { class: "label", text: `시료 추가 · ${ymdDots(state.activeDate)}` }),
           ])
         );
       }
@@ -2005,60 +2053,81 @@ function renderJobWork() {
         },
       });
 
-      const saveTime = async (ev) => {
-        const v = safeText(ev.target.value);
-        if (v === safeText(s.start_time)) return;
+      const saveTime = async (v) => {
+        const nv = safeText(v);
+        if (nv === safeText(s.start_time)) return;
         try {
-          await updateSampleFields(s.id, { start_time: v });
-          s.start_time = v;
+          await updateSampleFields(s.id, { start_time: nv });
+          s.start_time = nv;
         } catch (e) {
           console.error(e);
           alert(e?.message || String(e));
         }
       };
-      const tInp = el("input", {
-        class: "timeInput",
-        type: "time",
-        value: safeText(s.start_time),
-        onchange: saveTime,
-        onblur: saveTime,
-      });
+      const timeDial = makeTimeDial(s.start_time, saveTime);
+      try { timeDial.input.setAttribute("aria-label", "측정시작시간"); } catch {}
+
+      const locTimeRow = el("div", { class: "row", style: "gap:8px; flex-wrap:nowrap;" }, [
+        el("div", { style: "flex:1; min-width:160px;" }, [locInp]),
+        el("div", { style: "width:120px;" }, [timeDial.wrap]),
+      ]);
 
       left = el("div", { class: "sampleLeft" }, [
         el("div", { class: "sampleTitle", text: `P${s.p_index || "?"}` }),
         el("div", { class: "label", text: ymdDots(s.measurement_date) }),
-        locInp,
-        el("div", { class: "label", text: "측정시작시간" }),
-        tInp,
+        locTimeRow,
       ]);
     } else {
+      // 비산: P1 부지경계선 등의 텍스트를 타이틀에 붙이지 않고, 아래에서 위치/측정시작시간을 입력
+      const locSel = el("select", {
+        class: "input",
+        onchange: async (ev) => {
+          const v = safeText(ev.target.value);
+          if (v === safeText(s.sample_location)) return;
+          try {
+            await updateSampleFields(s.id, { sample_location: v });
+            s.sample_location = v;
+          } catch (e) {
+            console.error(e);
+            alert(e?.message || String(e));
+          }
+        },
+      });
+
+      const curLoc = safeText(s.sample_location);
+      if (curLoc && !SCATTER_LOCATIONS.includes(curLoc)) {
+        locSel.appendChild(el("option", { value: curLoc, text: curLoc }));
+      }
+      for (const name of SCATTER_LOCATIONS) {
+        locSel.appendChild(el("option", { value: name, text: name }));
+      }
+      locSel.value = curLoc && (curLoc === locSel.value || SCATTER_LOCATIONS.includes(curLoc))
+        ? curLoc
+        : (SCATTER_LOCATIONS[0] || "");
+
+      const saveTime = async (v) => {
+        const nv = safeText(v);
+        if (nv === safeText(s.start_time)) return;
+        try {
+          await updateSampleFields(s.id, { start_time: nv });
+          s.start_time = nv;
+        } catch (e) {
+          console.error(e);
+          alert(e?.message || String(e));
+        }
+      };
+      const timeDial = makeTimeDial(s.start_time, saveTime);
+      try { timeDial.input.setAttribute("aria-label", "측정시작시간"); } catch {}
+
+      const locTimeRow = el("div", { class: "row", style: "gap:8px; flex-wrap:nowrap;" }, [
+        el("div", { style: "flex:1; min-width:160px;" }, [locSel]),
+        el("div", { style: "width:120px;" }, [timeDial.wrap]),
+      ]);
+
       left = el("div", { class: "sampleLeft" }, [
-        el("div", { class: "sampleTitle", text: `P${s.p_index || "?"} · ${safeText(s.sample_location, "미입력")}` }),
-        el("div", { class: "sampleMeta" }, [
-          el("div", { class: "metaLine" }, [
-            el("span", { class: "label", text: ymdDots(s.measurement_date) }),
-          ]),
-          el("div", { class: "metaLine" }, [
-            el("span", { class: "label", text: "시각" }),
-            el("input", {
-              class: "timeInput",
-              value: safeText(s.start_time),
-              placeholder: "예: 10:30",
-              onblur: async (ev) => {
-                const v = safeText(ev.target.value);
-                if (v === safeText(s.start_time)) return;
-                try {
-                  await updateSampleFields(s.id, { start_time: v });
-                  s.start_time = v;
-                  setFoot("시각이 저장되었습니다.");
-                } catch (e) {
-                  console.error(e);
-                  setFoot(`저장 실패: ${e?.message || e}`);
-                }
-              },
-            }),
-          ]),
-        ]),
+        el("div", { class: "sampleTitle", text: `P${s.p_index || "?"}` }),
+        el("div", { class: "label", text: ymdDots(s.measurement_date) }),
+        locTimeRow,
       ]);
     }
 
