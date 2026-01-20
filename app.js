@@ -1,5 +1,3 @@
-/*__OUTER_IIFE__*/
-;(function(){
 // app.js (GitHub Pages web uploader)
 // - UI: index.html + styles.css classes are kept
 // - Data: Supabase (Auth + PostgREST)
@@ -20,20 +18,7 @@
 //   - Supabase Storage: "companyId/mode/jobId/.../role.jpg" (상대경로)
 //   - NAS:             "https://.../files/.../role.jpg" (URL)
 
-function __setBootFoot(msg){
-  try {
-    const el = document.getElementById('footStatus');
-    if (el) el.textContent = msg;
-  } catch {}
-}
-
-const createClient = (typeof window !== 'undefined' && window.supabase && typeof window.supabase.createClient === 'function')
-  ? window.supabase.createClient
-  : null;
-if (!createClient) {
-  __setBootFoot('Supabase 로드가 완료되지 않았습니다. (캐시/네트워크 확인)');
-  throw new Error('Supabase createClient not found');
-}
+import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 
 /** =========================
  *  Config
@@ -98,7 +83,17 @@ const CFG_FILE_BASE = _trim(APP_CONFIG.NAS_FILE_BASE);
 const CFG_DELETE = _trim(APP_CONFIG.NAS_DELETE_URL);
 const CFG_AUTH = _trim(APP_CONFIG.NAS_AUTH_TOKEN);
 
-const AUTO_GATEWAY = _isGithubIoHost() ? "" : _trim(location.origin);
+const AUTO_GATEWAY = (() => {
+  try {
+    // file:// 로 직접 열면 origin이 'null'이어서 NAS 게이트웨이로 오인하면 업로드가 망가짐
+    if (location.protocol === 'file:') return '';
+    const o = _trim(location.origin);
+    if (!o || o === 'null') return '';
+    return _isGithubIoHost() ? '' : o;
+  } catch {
+    return '';
+  }
+})();
 
 const NAS_GATEWAY_URL = _normBase(LS_GATEWAY || CFG_GATEWAY || AUTO_GATEWAY);
 const NAS_UPLOAD_URL = _trim(LS_UPLOAD || CFG_UPLOAD || (NAS_GATEWAY_URL ? `${NAS_GATEWAY_URL}/upload` : ""));
@@ -180,6 +175,19 @@ function safeText(v, fallback = "") {
   return s || fallback;
 }
 
+function hhmm(v) {
+  const s = String(v ?? '').trim();
+  if (!s) return '';
+  // allow 'HH:MM:SS' -> 'HH:MM'
+  if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(s)) {
+    const parts = s.split(':');
+    const hh = String(parts[0]).padStart(2, '0');
+    const mm = String(parts[1] || '00').padStart(2, '0');
+    return `${hh}:${mm}`;
+  }
+  return s;
+}
+
 function el(tag, attrs = {}, children = []) {
   const n = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
@@ -193,6 +201,128 @@ function el(tag, attrs = {}, children = []) {
   }
   for (const c of children || []) n.appendChild(c);
   return n;
+}
+
+// ===== Swipe to delete helper (touch + mouse) =====
+let __openSwipe = null;
+
+function createSwipeRow(contentNode, onDelete) {
+  const ROW_W = 92;
+
+  const delBtn = el('button', {
+    class: 'swipeDeleteBtn',
+    text: '삭제',
+    type: 'button',
+    onclick: async (ev) => {
+      ev.stopPropagation();
+      try {
+        await onDelete?.();
+      } finally {
+        close();
+      }
+    },
+  });
+
+  const actions = el('div', { class: 'swipeActions' }, [delBtn]);
+  const swipeContent = el('div', { class: 'swipeContent' }, [contentNode]);
+  const row = el('div', { class: 'swipeRow' }, [actions, swipeContent]);
+
+  let startX = 0;
+  let startY = 0;
+  let curX = 0;
+  let dragging = false;
+  let decided = false;
+  let isHorizontal = false;
+  let opened = false;
+
+  function setX(x, withAnim = true) {
+    const nx = Math.max(-ROW_W, Math.min(0, x));
+    if (withAnim) swipeContent.style.transition = 'transform 160ms ease';
+    else swipeContent.style.transition = 'none';
+    swipeContent.style.transform = `translate3d(${nx}px,0,0)`;
+    curX = nx;
+  }
+
+  function open() {
+    if (__openSwipe && __openSwipe !== close) __openSwipe();
+    __openSwipe = close;
+    opened = true;
+    setX(-ROW_W, true);
+  }
+
+  function close() {
+    opened = false;
+    if (__openSwipe === close) __openSwipe = null;
+    setX(0, true);
+  }
+
+  function onDown(ev) {
+    const e = ev.touches ? ev.touches[0] : ev;
+    startX = e.clientX;
+    startY = e.clientY;
+    dragging = true;
+    decided = false;
+    isHorizontal = false;
+    row.classList.add('dragging');
+    if (__openSwipe && __openSwipe !== close) __openSwipe();
+  }
+
+  function onMove(ev) {
+    if (!dragging) return;
+    const e = ev.touches ? ev.touches[0] : ev;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+
+    if (!decided) {
+      decided = true;
+      isHorizontal = Math.abs(dx) > Math.abs(dy) * 1.1;
+    }
+    if (!isHorizontal) return; // allow scroll
+
+    ev.preventDefault();
+    const base = opened ? -ROW_W : 0;
+    setX(base + dx, false);
+  }
+
+  function onUp() {
+    if (!dragging) return;
+    dragging = false;
+    row.classList.remove('dragging');
+
+    const shouldOpen = curX <= -ROW_W * 0.5;
+    if (shouldOpen) open();
+    else close();
+  }
+
+  // Touch
+  swipeContent.addEventListener('touchstart', onDown, { passive: true });
+  swipeContent.addEventListener('touchmove', onMove, { passive: false });
+  swipeContent.addEventListener('touchend', onUp, { passive: true });
+  swipeContent.addEventListener('touchcancel', onUp, { passive: true });
+
+  // Mouse (desktop)
+  swipeContent.addEventListener('mousedown', (ev) => {
+    if (ev.button !== 0) return;
+    onDown(ev);
+
+    const mm = (e) => onMove(e);
+    const mu = () => {
+      document.removeEventListener('mousemove', mm);
+      document.removeEventListener('mouseup', mu);
+      onUp();
+    };
+    document.addEventListener('mousemove', mm);
+    document.addEventListener('mouseup', mu);
+  });
+
+  // Tap content while opened -> close
+  swipeContent.addEventListener('click', () => {
+    if (opened) close();
+  }, true);
+
+  // expose close for global management
+  row.__closeSwipe = close;
+  return row;
 }
 
 function dotClass(status) {
@@ -324,6 +454,15 @@ const viewerPrev = document.getElementById("viewerPrev");
 const viewerNext = document.getElementById("viewerNext");
 const viewerZoom = document.getElementById("viewerZoom");
 
+// date modal
+const dateModal = document.getElementById('dateModal');
+const dateModalClose = document.getElementById('dateModalClose');
+const dateModalInput = document.getElementById('dateModalInput');
+const dateModalList = document.getElementById('dateModalList');
+const dateModalCheck = document.getElementById('dateModalCheck');
+
+let __datePicked = '';
+
 /** =========================
  *  Header / menu
  *  ========================= */
@@ -362,6 +501,14 @@ function goBack() {
     closeModal();
     return;
   }
+  if (dateModal && !dateModal.hidden) {
+    closeDateModal();
+    return;
+  }
+  if (dateModal && !dateModal.hidden) {
+    closeDateModal();
+    return;
+  }
 
   if (state.job) {
     state.job = null;
@@ -385,6 +532,91 @@ function goBack() {
     return;
   }
 }
+
+function openDateModal() {
+  if (!dateModal) return;
+  __datePicked = iso10(state.activeDate || new Date());
+  if (dateModalInput) dateModalInput.value = __datePicked;
+  renderDateModal();
+  dateModal.hidden = false;
+}
+
+function closeDateModal() {
+  if (!dateModal) return;
+  dateModal.hidden = true;
+}
+
+function renderDateModal() {
+  if (!dateModalList) return;
+  dateModalList.innerHTML = '';
+  const sorted = [...(state.dates || [])].sort();
+  for (const d of sorted) {
+    const chip = el('button', {
+      class: 'dateChip' + (d === state.activeDate ? ' active' : ''),
+      type: 'button',
+      text: ymdDots(d),
+      onclick: () => {
+        __datePicked = d;
+        if (dateModalInput) dateModalInput.value = d;
+      },
+    });
+    const x = el('button', {
+      class: 'dateChipX',
+      type: 'button',
+      text: '×',
+      onclick: async (ev) => {
+        ev.stopPropagation();
+        await deleteDateAndSamples(d);
+      },
+    });
+    chip.appendChild(x);
+    dateModalList.appendChild(chip);
+  }
+}
+
+async function deleteDateAndSamples(dateISO) {
+  const samples = state.samplesByDate.get(dateISO) || [];
+  if (samples.length) {
+    const msg = `${ymdDots(dateISO)} 날짜의 시료 ${samples.length}개를 모두 삭제할까요?\n(사진도 함께 삭제됩니다)`;
+    if (!confirm(msg)) return;
+    try {
+      setFoot('삭제를 진행 중입니다...');
+      for (const s of [...samples]) {
+        await deleteSample(s, { confirm: false, reload: false, silent: true });
+      }
+      await loadJob(state.job);
+      setFoot('삭제가 완료되었습니다.');
+    } catch (e) {
+      console.error(e);
+      setFoot(`삭제 실패: ${e?.message || e}`);
+      alert(e?.message || String(e));
+    }
+  } else {
+    // just remove empty date
+    state.dates = state.dates.filter((d) => d !== dateISO);
+    state.samplesByDate.delete(dateISO);
+    if (state.activeDate === dateISO) state.activeDate = state.dates[0] || null;
+    render();
+  }
+  renderDateModal();
+}
+
+dateModalClose?.addEventListener('click', closeDateModal);
+dateModalInput?.addEventListener('change', (ev) => {
+  __datePicked = iso10(ev.target.value);
+});
+dateModalCheck?.addEventListener('click', () => {
+  const v = iso10(__datePicked || dateModalInput?.value || state.activeDate || new Date());
+  if (!state.dates.includes(v)) {
+    state.dates.push(v);
+    state.dates.sort();
+    state.samplesByDate.set(v, []);
+  }
+  state.activeDate = v;
+  state.addOpen = false;
+  closeDateModal();
+  render();
+});
 
 btnBack?.addEventListener("click", goBack);
 btnGear?.addEventListener("click", toggleSettings);
@@ -468,8 +700,8 @@ function viewerRoleOrder(sample) {
     // 농도는 사진 1장만: UI/뷰어에서는 항상 measurement 슬롯만 사용
     return ["measurement"];
   }
-  // 비산은 기본 start/end + 단일/추가 사진 대응
-  return ["start", "end", "single"];
+  // 비산은 start/end만 사용 (single 제거)
+  return ["start", "end"];
 }
 function buildViewerItemsForDate(dateISO) {
   const samples = state.samplesByDate.get(dateISO) || [];
@@ -1088,9 +1320,13 @@ async function renumberSamplesForDate(jobId, dateISO) {
   }
 }
 
-async function deleteSample(sample) {
-  const msg = `P${sample.p_index} 시료를 삭제하시겠습니까?\n첨부된 사진도 함께 삭제됩니다.`;
-  if (!confirm(msg)) return;
+async function deleteSample(sample, opts = {}) {
+  const confirmFlag = opts.confirm !== false;
+  const reloadFlag = opts.reload !== false;
+  if (confirmFlag) {
+    const msg = `P${sample.p_index} 시료를 삭제하시겠습니까?\n첨부된 사진도 함께 삭제됩니다.`;
+    if (!confirm(msg)) return;
+  }
 
   try {
     setFoot("삭제를 진행 중입니다...");
@@ -1117,7 +1353,7 @@ async function deleteSample(sample) {
     }
 
     setFoot("삭제가 완료되었습니다.");
-    await loadJob(state.job);
+    if (reloadFlag) await loadJob(state.job);
   } catch (e) {
     console.error(e);
     setFoot(`삭제에 실패했습니다: ${e?.message || e}`);
@@ -1536,26 +1772,21 @@ function renderJobSelect() {
     for (const j of state.jobs) {
       const sub = [safeText(j.address), safeText(j.contractor)].filter(Boolean).join(" · ");
 
-      list.appendChild(
-        el("div", { class: "item" }, [
-          el("div", {}, [
-            el("div", { class: "item-title", text: safeText(j.project_name, "(이름없음)") }),
-            el("div", { class: "item-sub", text: sub || `생성: ${String(j.created_at || "").slice(0, 10)}` }),
-          ]),
-          el("div", { class: "row", style: "gap:8px;" }, [
-            el("button", {
-              class: "btn small",
-              text: "삭제",
-              onclick: () => deleteJobAndRelated(j),
-            }),
-            el("button", {
-              class: "btn primary small",
-              text: "열기",
-              onclick: () => loadJob(j),
-            }),
-          ]),
-        ])
-      );
+      const item = el("div", { class: "item" }, [
+        el("div", {}, [
+          el("div", { class: "item-title", text: safeText(j.project_name, "(이름없음)") }),
+          el("div", { class: "item-sub", text: sub || `생성: ${String(j.created_at || "").slice(0, 10)}` }),
+        ]),
+        el("div", { class: "row", style: "gap:8px;" }, [
+          el("button", {
+            class: "btn primary small",
+            text: "열기",
+            onclick: () => loadJob(j),
+          }),
+        ]),
+      ]);
+
+      list.appendChild(createSwipeRow(item, () => deleteJobAndRelated(j)));
     }
   }
 
@@ -1583,19 +1814,20 @@ function renderJobWork() {
     );
   }
 
-  const dateAdd = el("input", { class: "input", type: "date", value: iso10(state.activeDate) });
-  const dateAddBtn = el("button", {
-    class: "btn",
-    text: "날짜 추가/이동",
+  const openCalendarBtn = el('button', {
+    class: 'btn small',
+    text: '달력',
     onclick: () => {
-      const v = iso10(dateAdd.value);
-      if (!state.dates.includes(v)) {
-        state.dates.push(v);
-        state.dates.sort();
-        state.samplesByDate.set(v, []);
-      }
-      state.activeDate = v;
-      render();
+      openDateModal();
+    },
+  });
+
+  const openCalendarBtn = el('button', {
+    class: 'btn small',
+    text: '달력',
+    onclick: () => {
+      __datePicked = iso10(state.activeDate || new Date());
+      openDateModal();
     },
   });
 
@@ -1610,7 +1842,8 @@ function renderJobWork() {
     "폐기물 보관지점",
   ];
 
-  let locInput;
+  let locInput = null;
+
   if (state.mode === "scatter") {
     const sel = el("select", {
       class: "input",
@@ -1623,39 +1856,23 @@ function renderJobWork() {
     }
     sel.value = state.addLoc && SCATTER_LOCATIONS.includes(state.addLoc) ? state.addLoc : SCATTER_LOCATIONS[0];
     locInput = sel;
-  } else {
-    const inp = el("input", {
-      class: "input",
-      placeholder: "시료 위치(예: 거실, 주방...)",
-      oninput: (ev) => {
-        state.addLoc = ev.target.value;
-      },
-    });
-    inp.value = state.addLoc || "";
-    locInput = inp;
   }
-  const timeInput = el("input", { class: "timeInput", placeholder: "시각(선택)", value: state.addTime || "" });
+  // 농도는 시료 추가 시 위치/시각 입력을 받지 않습니다(아래 등록된 시료에서 수정).
+
 
   const addSampleBtn = el("button", {
     class: "btn primary",
     text: "시료 추가",
     onclick: async () => {
       try {
-        const loc = safeText(locInput.value);
+        const loc = (state.mode === 'scatter' && locInput) ? safeText(locInput.value) : '';
         const dateISO = state.activeDate || new Date().toISOString().slice(0, 10);
 
         setFoot("시료를 생성 중입니다...");
-        const newRow = await createSample(job.id, dateISO, loc);
+        await createSample(job.id, dateISO, loc);
 
         // reload to get correct p_index & date lists
         await loadJob(job);
-
-        // time optional
-        const t = safeText(timeInput.value);
-        if (t) {
-          await updateSampleFields(newRow.id || newRow?.[0]?.id, { start_time: t });
-          await loadJob(job);
-        }
 
         setFoot("시료가 추가되었습니다.");
       } catch (e) {
@@ -1673,21 +1890,23 @@ function renderJobWork() {
         el("div", { class: "item-sub", text: [modeLabel(state.mode), safeText(job.address)].filter(Boolean).join(" · ") }),
       ]),
       el("div", { class: "row", style: "gap:8px;" }, [
-        dateAdd,
-        dateAddBtn,
+        el('div', { class: 'label', text: ymdDots(state.activeDate) }),
+        openCalendarBtn,
       ]),
     ]),
     tabs,
     el("div", { class: "row", style: "margin-top:10px;" }, [
-      el("div", { class: "col", style: "flex:1; min-width:240px;" }, [
-        el("div", { class: "label", text: `시료 추가 · ${ymdDots(state.activeDate)}` }),
-        locInput,
-      ]),
-      el("div", { class: "col" }, [
-        el("div", { class: "label", text: "시각(선택)" }),
-        timeInput,
-      ]),
-      el("div", { class: "col", style: "justify-content:flex-end;" }, [addSampleBtn]),
+      state.mode === "density"
+        ? el("div", { class: "col", style: "flex:1; min-width:240px;" }, [
+            el("div", { class: "label", text: `시료 추가 · ${ymdDots(state.activeDate)}` }),
+          ])
+        : el("div", { class: "col", style: "flex:1; min-width:240px;" }, [
+            el("div", { class: "label", text: `시료 추가 · ${ymdDots(state.activeDate)}` }),
+            el('div', { class: 'addSampleRow' }, [locInput, addSampleBtn]),
+          ]),
+      state.mode === 'density'
+        ? el("div", { class: "col", style: "justify-content:flex-end;" }, [addSampleBtn])
+        : el('div'),
     ]),
   ]);
 
@@ -1703,73 +1922,148 @@ function renderJobWork() {
   }
 
   for (const s of samples) {
-  
-    const left = el("div", { class: "sampleLeft" }, [
-      el("div", { class: "sampleTitle", text: `P${s.p_index || "?"} · ${safeText(s.sample_location, "미입력")}` }),
-      el("div", { class: "sampleMeta" }, [
-        el("div", { class: "metaLine" }, [
-          el("span", { class: "label", text: ymdDots(s.measurement_date) }),
-        ]),
-        el("div", { class: "metaLine" }, [
-          el("span", { class: "label", text: "시각" }),
-          el("input", {
-            class: "timeInput",
-            value: safeText(s.start_time),
-            placeholder: "예: 10:30",
-            onblur: async (ev) => {
+
+    // location editor (농도: 자유 입력 / 비산: 선택)
+    const locEditor = (state.mode === 'scatter')
+      ? (() => {
+          const sel = el('select', {
+            class: 'input',
+            onchange: async (ev) => {
               const v = safeText(ev.target.value);
-              if (v === safeText(s.start_time)) return;
+              if (v === safeText(s.sample_location)) return;
               try {
-                await updateSampleFields(s.id, { start_time: v });
-                s.start_time = v;
-                setFoot("시각이 저장되었습니다.");
+                await updateSampleFields(s.id, { sample_location: v });
+                s.sample_location = v;
+                setFoot('위치가 저장되었습니다.');
+                render();
               } catch (e) {
                 console.error(e);
                 setFoot(`저장 실패: ${e?.message || e}`);
               }
             },
-          }),
-          el("button", { class: "btn small", text: "삭제", onclick: () => deleteSample(s) }),
-        ]),
+          });
+          const cur = safeText(s.sample_location);
+          const opts = [...SCATTER_LOCATIONS];
+          if (cur && !opts.includes(cur)) opts.unshift(cur);
+          for (const name of opts) sel.appendChild(el('option', { value: name, text: name }));
+          sel.value = cur || opts[0] || '';
+          return sel;
+        })()
+      : el('input', {
+          class: state.mode === 'density' ? 'locInputSmall' : 'input',
+          value: safeText(s.sample_location),
+          placeholder: '시료 위치 입력',
+          onblur: async (ev) => {
+            const v = safeText(ev.target.value);
+            if (v === safeText(s.sample_location)) return;
+            try {
+              await updateSampleFields(s.id, { sample_location: v });
+              s.sample_location = v;
+              setFoot('위치가 저장되었습니다.');
+              render();
+            } catch (e) {
+              console.error(e);
+              setFoot(`저장 실패: ${e?.message || e}`);
+            }
+          },
+        });
+
+    const timeEditor = el('input', {
+      class: 'timeInput',
+      type: 'time',
+      step: '60',
+      value: hhmm(s.start_time),
+      onchange: async (ev) => {
+        const v = safeText(ev.target.value);
+        if (v === safeText(s.start_time)) return;
+        try {
+          await updateSampleFields(s.id, { start_time: v });
+          s.start_time = v;
+          setFoot('측정시작시간이 저장되었습니다.');
+        } catch (e) {
+          console.error(e);
+          setFoot(`저장 실패: ${e?.message || e}`);
+        }
+      },
+    });
+
+    const metaLines = [
+      el('div', { class: 'metaLine' }, [
+        el('span', { class: 'label', text: ymdDots(s.measurement_date) }),
       ]),
+    ];
+
+    if (state.mode === 'density') {
+      // 농도: 위치/시간을 같은 줄에 (위치 입력칸은 작게)
+      metaLines.push(
+        el('div', { class: 'metaLine split' }, [
+          el('div', { class: 'field' }, [
+            el('span', { class: 'label', text: '위치' }),
+            locEditor,
+          ]),
+          el('div', { class: 'field' }, [
+            el('span', { class: 'label', text: '측정시작시간' }),
+            timeEditor,
+          ]),
+        ])
+      );
+    } else {
+      metaLines.push(
+        el('div', { class: 'metaLine' }, [
+          el('span', { class: 'label', text: '위치' }),
+          locEditor,
+        ])
+      );
+      metaLines.push(
+        el('div', { class: 'metaLine' }, [
+          el('span', { class: 'label', text: '측정시작시간' }),
+          timeEditor,
+        ])
+      );
+    }
+
+    const left = el('div', { class: 'sampleLeft' }, [
+      el('div', { class: 'sampleTitle', text: `P${s.p_index || '?'} · ${safeText(s.sample_location, '미입력')}` }),
+      el('div', { class: 'sampleMeta' }, metaLines),
     ]);
 
-    const right = el("div", { class: `sampleRight ${state.mode}` });
+    const right = el('div', { class: `sampleRight ${state.mode}` });
 
     for (const role of viewerRoleOrder(s)) {
-      const status = s._photoState?.[role] || "";
-      const dot = el("div", { class: dotClass(status) });
+      const status = s._photoState?.[role] || '';
+      const dot = el('div', { class: dotClass(status) });
 
-      const thumb = el("div", { class: "thumbMini", title: roleLabel(role) });
+      const thumb = el('div', { class: 'thumbMini', title: roleLabel(role) });
       const url = s._thumbUrl?.[role];
       if (url) {
         thumb.appendChild(
-          el("img", {
+          el('img', {
             src: url,
             alt: roleLabel(role),
             onclick: () => openViewerAt(dateISO, s.id, role),
           })
         );
       } else {
-        thumb.appendChild(el("div", { text: roleLabel(role) }));
+        thumb.appendChild(el('div', { text: roleLabel(role) }));
         ensureThumbUrl(s, role);
       }
 
-      const btns = el("div", { class: "slotBtns" }, [
-        el("button", { class: "btn small", text: "촬영", onclick: () => pickPhoto(s, role, true) }),
-        el("button", { class: "btn small", text: "앨범", onclick: () => pickPhoto(s, role, false) }),
+      const btns = el('div', { class: 'slotBtns' }, [
+        el('button', { class: 'btn small', text: '촬영', onclick: () => pickPhoto(s, role, true) }),
+        el('button', { class: 'btn small', text: '앨범', onclick: () => pickPhoto(s, role, false) }),
       ]);
 
       right.appendChild(
-        el("div", { class: "slotMini" }, [
-          el("div", { class: "slotHead" }, [dot, el("span", { text: roleLabel(role) })]),
+        el('div', { class: 'slotMini' }, [
+          el('div', { class: 'slotHead' }, [dot, el('span', { text: roleLabel(role) })]),
           thumb,
           btns,
         ])
       );
     }
 
-    root.appendChild(el("div", { class: "sampleRow" }, [left, right]));
+    const row = el('div', { class: 'sampleRow' }, [left, right]);
+    root.appendChild(createSwipeRow(row, () => deleteSample(s)));
   }
 }
 
@@ -1817,6 +2111,4 @@ function renderJobWork() {
     render();
     try { window.__APP_BOOTED = false; } catch {}
   }
-})();
-
 })();
