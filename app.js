@@ -192,6 +192,20 @@ function setFoot(msg) {
   if (el) el.textContent = msg;
 }
 
+async function syncSessionTokens(session) {
+  // iOS 홈화면(PWA)/일부 WebView에서 로그인 직후 RLS 조회가 비는 케이스 방어
+  try {
+    if (session?.access_token && session?.refresh_token) {
+      await supabase.auth.setSession({
+        access_token: session.access_token,
+        refresh_token: session.refresh_token,
+      });
+    }
+  } catch (e) {
+    console.warn("setSession sync failed:", e);
+  }
+}
+
 function normEmail(v) {
   return String(v || "").trim().toLowerCase();
 }
@@ -1413,16 +1427,7 @@ async function loadSession() {
   const sess = data?.session || null;
   state.user = sess?.user || null;
 
-  if (sess?.access_token && sess?.refresh_token) {
-    try {
-      await supabase.auth.setSession({
-        access_token: sess.access_token,
-        refresh_token: sess.refresh_token,
-      });
-    } catch (e) {
-      console.warn('setSession sync failed:', e);
-    }
-  }
+  await syncSessionTokens(sess);
 
   if (state.user) {
     setFoot('로그인되었습니다.');
@@ -1799,24 +1804,50 @@ function renderJobWork() {
   // date tabs
   const tabs = el("div", { class: "tabs", style: "margin:10px 0;" });
   for (const d of state.dates) {
+    const del = el("span", {
+      class: "tabX",
+      text: "×",
+      onclick: (ev) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+
+        const bucket = state.samplesByDate.get(d) || [];
+        if (bucket.length) {
+          alert("이 날짜에 시료가 있어 삭제할 수 없습니다.\n(먼저 시료를 삭제해 주세요.)");
+          return;
+        }
+        if (!confirm(`${ymdDots(d)} 날짜를 삭제할까요?`)) return;
+
+        state.samplesByDate.delete(d);
+        state.dates = state.dates.filter((x) => x !== d);
+        if (state.activeDate === d) {
+          state.activeDate = state.dates[0] || new Date().toISOString().slice(0, 10);
+          if (!state.samplesByDate.has(state.activeDate)) state.samplesByDate.set(state.activeDate, []);
+        }
+        render();
+      },
+    });
     tabs.appendChild(
       el("button", {
         class: "tab" + (state.activeDate === d ? " active" : ""),
-        text: ymdDots(d),
+        type: "button",
         onclick: () => {
           state.activeDate = d;
           state.addOpen = false;
           render();
         },
-      })
+      }, [
+        el("span", { class: "tabText", text: ymdDots(d) }),
+        del,
+      ])
     );
   }
 
-  const dateAdd = el("input", { class: "input", type: "date", value: iso10(state.activeDate) });
-  const dateAddBtn = el("button", {
-    class: "btn",
-    text: "날짜 추가/이동",
-    onclick: () => {
+  const dateAdd = el("input", {
+    class: "input",
+    type: "date",
+    value: iso10(state.activeDate),
+    onchange: () => {
       const v = iso10(dateAdd.value);
       if (!state.dates.includes(v)) {
         state.dates.push(v);
@@ -1839,7 +1870,7 @@ function renderJobWork() {
     "폐기물 보관지점",
   ];
 
-  let locInput;
+  let locInput = null;
   if (state.mode === "scatter") {
     const sel = el("select", {
       class: "input",
@@ -1852,25 +1883,14 @@ function renderJobWork() {
     }
     sel.value = state.addLoc && SCATTER_LOCATIONS.includes(state.addLoc) ? state.addLoc : SCATTER_LOCATIONS[0];
     locInput = sel;
-  } else {
-    const inp = el("input", {
-      class: "input",
-      placeholder: "시료 위치(예: 거실, 주방...)",
-      oninput: (ev) => {
-        state.addLoc = ev.target.value;
-      },
-    });
-    inp.value = state.addLoc || "";
-    locInput = inp;
   }
-  const timeInput = el("input", { class: "timeInput", placeholder: "시각(선택)", value: state.addTime || "" });
 
   const addSampleBtn = el("button", {
     class: "btn primary",
     text: "시료 추가",
     onclick: async () => {
       try {
-        const loc = safeText(locInput.value);
+        const loc = safeText(locInput ? locInput.value : "");
         const dateISO = state.activeDate || new Date().toISOString().slice(0, 10);
 
         setFoot("시료를 생성 중입니다...");
@@ -1878,13 +1898,6 @@ function renderJobWork() {
 
         // reload to get correct p_index & date lists
         await loadJob(job);
-
-        // time optional
-        const t = safeText(timeInput.value);
-        if (t) {
-          await updateSampleFields(newRow.id || newRow?.[0]?.id, { start_time: t });
-          await loadJob(job);
-        }
 
         setFoot("시료가 추가되었습니다.");
       } catch (e) {
@@ -1903,18 +1916,13 @@ function renderJobWork() {
       ]),
       el("div", { class: "row", style: "gap:8px;" }, [
         dateAdd,
-        dateAddBtn,
       ]),
     ]),
     tabs,
     el("div", { class: "row", style: "margin-top:10px;" }, [
       el("div", { class: "col", style: "flex:1; min-width:240px;" }, [
         el("div", { class: "label", text: `시료 추가 · ${ymdDots(state.activeDate)}` }),
-        locInput,
-      ]),
-      el("div", { class: "col" }, [
-        el("div", { class: "label", text: "시각(선택)" }),
-        timeInput,
+        ...(locInput ? [locInput] : []),
       ]),
       el("div", { class: "col", style: "justify-content:flex-end;" }, [addSampleBtn]),
     ]),
@@ -1932,19 +1940,49 @@ function renderJobWork() {
   }
 
   for (const s of samples) {
-  
-    const left = el("div", { class: "sampleLeft" }, [
-      el("div", { class: "sampleTitle", text: `P${s.p_index || "?"} · ${safeText(s.sample_location, "미입력")}` }),
-      el("div", { class: "sampleMeta" }, [
-        el("div", { class: "metaLine" }, [
-          el("span", { class: "label", text: ymdDots(s.measurement_date) }),
-        ]),
+
+    let titleEl;
+    if (state.mode === "density") {
+      const locEdit = el("input", {
+        class: "sampleLocEdit",
+        value: safeText(s.sample_location),
+        placeholder: "미입력",
+        onblur: async (ev) => {
+          const v = safeText(ev.target.value);
+          if (v === safeText(s.sample_location)) return;
+          try {
+            await updateSampleFields(s.id, { sample_location: v });
+            s.sample_location = v;
+            setFoot("시료 위치가 저장되었습니다.");
+          } catch (e) {
+            console.error(e);
+            setFoot(`저장 실패: ${e?.message || e}`);
+          }
+        },
+      });
+      titleEl = el("div", { class: "sampleTitle" }, [
+        el("span", { class: "sampleTitlePrefix", text: `P${s.p_index || "?"} · ` }),
+        locEdit,
+      ]);
+    } else {
+      titleEl = el("div", { class: "sampleTitle", text: `P${s.p_index || "?"} · ${safeText(s.sample_location, "미입력")}` });
+    }
+
+    const metaChildren = [
+      el("div", { class: "metaLine" }, [
+        el("span", { class: "label", text: ymdDots(s.measurement_date) }),
+      ]),
+    ];
+
+    if (state.mode !== "scatter") {
+      metaChildren.push(
         el("div", { class: "metaLine" }, [
           el("span", { class: "label", text: "시각" }),
           el("input", {
             class: "timeInput",
+            type: "time",
+            step: "60",
             value: safeText(s.start_time),
-            placeholder: "예: 10:30",
             onblur: async (ev) => {
               const v = safeText(ev.target.value);
               if (v === safeText(s.start_time)) return;
@@ -1957,8 +1995,14 @@ function renderJobWork() {
                 setFoot(`저장 실패: ${e?.message || e}`);
               }
             },
-          }),        ]),
-      ]),
+          }),
+        ])
+      );
+    }
+
+    const left = el("div", { class: "sampleLeft" }, [
+      titleEl,
+      el("div", { class: "sampleMeta" }, metaChildren),
     ]);
 
     const right = el("div", { class: `sampleRight ${state.mode}` });
@@ -2020,6 +2064,7 @@ function renderJobWork() {
 
     // auth state change
     supabase.auth.onAuthStateChange(async (_event, session) => {
+      await syncSessionTokens(session).catch(() => null);
       state.user = session?.user || null;
       if (state.user) {
         await loadCompanies().catch(() => null);
