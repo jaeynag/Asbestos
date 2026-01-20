@@ -189,6 +189,18 @@ select{
 }
 .tabX:active{ filter:brightness(0.9); }
 
+/* 날짜 선택 후 적용(체크) 버튼 */
+.dateApplyBtn{
+  width:40px;
+  height:40px;
+  padding:0;
+  border-radius:999px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  font-weight:900;
+}
+
 .list{ display:flex; flex-direction:column; gap:8px; }
 .item{
   border:1px solid var(--line);
