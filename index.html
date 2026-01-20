@@ -2,13 +2,10 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta http-equiv="Pragma" content="no-cache" />
-  <meta http-equiv="Expires" content="0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="color-scheme" content="light" />
   <title>Asbestos field photos</title>
-  <link rel="stylesheet" href="./styles.css?v=20260120-03" />
+  <link rel="stylesheet" href="./styles.css?v=20260119-10" />
   <link rel="icon" href="./favicon.ico" />
   <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
   <link rel="manifest" href="./manifest.json" />
@@ -16,6 +13,10 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Asbestos" />
+
+  <!-- module preload: 홈화면(PWA)에서 모듈 로드 실패 확률을 조금이라도 낮추기 -->
+  <link rel="modulepreload" href="./app.js?v=20260119-10" />
 
 </head>
 <body>
@@ -90,33 +91,46 @@
     </div>
   </div>
 
-  <!-- 날짜 관리 모달(달력 + 날짜 삭제) -->
-  <div id="dateModal" class="modal" hidden>
-    <div class="modal-backdrop"></div>
-    <div class="modal-card date-card">
-      <div class="modal-head">
-        <div class="modal-title">날짜 선택</div>
-        <button id="dateModalClose" class="btn ghost" type="button">닫기</button>
-      </div>
-      <div class="modal-body">
-        <div class="datePickRow">
-          <input id="dateModalInput" class="input" type="date" />
-        </div>
-        <div class="label" style="margin-top:10px;">등록된 날짜</div>
-        <div id="dateModalList" class="dateChipList"></div>
-      </div>
-      <div class="modal-actions">
-        <div></div>
-        <button id="dateModalCheck" class="btn primary" type="button" aria-label="확인">✓</button>
-      </div>
-    </div>
-  </div>
-
   <!--
     전사 공통 설정 (직원/다른 PC 포함)
     - NAS에서 GitHub Pages를 리버스 프록시로 제공하는 경우, 기본값(현재 도메인)이 자동으로 NAS 업로드로 동작합니다.
     - GitHub Pages 도메인(*.github.io)에서 NAS로 강제 업로드하려면 아래 값을 채워 넣으세요.
   -->
+  <script>
+    (function () {
+      // app.js 로드/초기화 실패 시, 홈화면(PWA)에서 빈 화면으로 남는 걸 방지
+      var foot = function () { return document.getElementById('footStatus'); };
+      try { window.__APP_BOOTED = false; } catch (e) {}
+
+      window.addEventListener('error', function (ev) {
+        try {
+          var msg = (ev && (ev.message || (ev.error && ev.error.message))) || 'unknown';
+          var el = foot();
+          if (el) el.textContent = '스크립트 로드 실패: ' + msg;
+        } catch (e) {}
+      });
+
+      window.addEventListener('unhandledrejection', function (ev) {
+        try {
+          var reason = ev && ev.reason;
+          var msg = (reason && (reason.message || String(reason))) || 'unknown';
+          var el = foot();
+          if (el) el.textContent = '초기화 실패: ' + msg;
+        } catch (e) {}
+      });
+
+      // 3.5초 내 부팅 플래그가 안 서면 안내 메시지
+      setTimeout(function () {
+        try {
+          if (window.__APP_BOOTED) return;
+          var el = foot();
+          if (!el) return;
+          el.textContent = '로딩이 지연되고 있어. (홈화면 실행이면 아이콘 삭제 후 다시 추가 / 네트워크 확인)';
+        } catch (e) {}
+      }, 3500);
+    })();
+  </script>
+
   <script>
     window.APP_CONFIG = {
       NAS_GATEWAY_URL: "https://asbts.synology.me",
@@ -126,50 +140,7 @@
     };
   </script>
 
-
-  <!-- Supabase UMD loader (explicit dist/umd path for Safari/iOS). Then load app.js. -->
-  <script>
-    (function () {
-      var APP_SRC = "./app.js?v=20260120-06";
-      var SB_SRC_1 = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js";
-      var SB_SRC_2 = "https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js";
-
-      function setStatus(msg) {
-        try {
-          var el = document.getElementById('footStatus');
-          if (el) el.textContent = msg;
-        } catch (e) {}
-      }
-
-      function loadScript(src, onOk, onErr) {
-        var s = document.createElement('script');
-        s.src = src;
-        s.async = true;
-        s.onload = function () { onOk && onOk(); };
-        s.onerror = function () { onErr && onErr(); };
-        document.head.appendChild(s);
-      }
-
-      function loadApp() {
-        loadScript(APP_SRC, null, function () {
-          setStatus('app.js 로드 실패');
-        });
-      }
-
-      setStatus('라이브러리 로드 중...');
-      loadScript(SB_SRC_1, function () {
-        setStatus('준비 중...');
-        loadApp();
-      }, function () {
-        loadScript(SB_SRC_2, function () {
-          setStatus('준비 중...');
-          loadApp();
-        }, function () {
-          setStatus('Supabase 로드 실패');
-        });
-      });
-    })();
-  </script>
+  <link rel="modulepreload" href="./app.js?v=20260119-10" />
+  <script type="module" src="./app.js?v=20260119-10"></script>
 </body>
 </html>
-
