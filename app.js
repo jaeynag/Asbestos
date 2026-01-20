@@ -18,7 +18,8 @@
 //   - Supabase Storage: "companyId/mode/jobId/.../role.jpg" (상대경로)
 //   - NAS:             "https://.../files/.../role.jpg" (URL)
 
-import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+// NOTE: Supabase는 index.html에서 UMD 번들로 로드됩니다.
+// (file://, 홈화면(PWA) 등에서 ESM import가 막히거나 캐시로 실패해 "타이틀만 뜸"이 발생하던 케이스 방지)
 
 /** =========================
  *  Config
@@ -380,7 +381,14 @@ function safeStorage() {
   }
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+const __sb = (typeof window !== "undefined") ? window.supabase : null;
+if (!__sb || typeof __sb.createClient !== "function") {
+  // 여기서 죽으면 화면이 "타이틀만" 뜨는 상태가 되기 쉬워서, 원인을 남기고 중단
+  setFoot("Supabase 로드 실패(네트워크/캐시). 새로고침 후에도 같으면 홈화면 아이콘 삭제→재추가.");
+  throw new Error("Supabase UMD not loaded: window.supabase.createClient missing");
+}
+
+const supabase = __sb.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
