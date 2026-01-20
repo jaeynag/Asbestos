@@ -19,16 +19,14 @@
 //   - NAS:             "https://.../files/.../role.jpg" (URL)
 
 // NOTE: iOS 홈화면(PWA)/일부 WebView에서 외부 ESM CDN 로드가 간헐적으로 실패하는 케이스가 있어
-// supabase-js는 동적 import로 로드합니다(CDN 우선, 실패 시 로컬).
+// supabase-js는 동적 import로 로드합니다(로컬 파일 우선, 실패 시 CDN).
 async function loadSupabaseModule() {
   const candidates = [
-    // 1) 온라인(일반 브라우저/PC)에서는 CDN이 가장 안정적
-    "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm",
-    // 2) jsdelivr가 막혔을 때 대체
-    "https://esm.sh/@supabase/supabase-js@2",
-    // 3) 로컬로 번들해두면 PWA 안정성이 확 올라감(여기부터는 오프라인/특수 환경용)
+    // 로컬로 번들해두면 PWA 안정성이 확 올라감(추천)
     "./vendor/supabase-js@2.esm.js",
     "./vendor/supabase-js@2/+esm.js",
+    // 최후 fallback
+    "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm",
   ];
   let lastErr = null;
   for (const url of candidates) {
@@ -190,21 +188,8 @@ function formatFastApiDetail(detail) {
 }
 
 function setFoot(_msg) {
-  // 상단 고정 토스트로 표시 (스크롤 유발 방지)
-  try {
-    const bar = document.getElementById("footStatus");
-    if (!bar) return;
-    const msg = String(_msg ?? "").trim();
-    if (!msg) return;
-    bar.textContent = msg;
-    bar.classList.add("show");
-    clearTimeout(setFoot._t);
-    setFoot._t = setTimeout(() => {
-      try { bar.classList.remove("show"); } catch {}
-    }, 1600);
-  } catch {
-    // ignore
-  }
+  // 하단 알림문구 제거(요청사항)
+  return;
 }
 
 function normEmail(v) {
@@ -229,37 +214,6 @@ function el(tag, attrs = {}, children = []) {
   }
   for (const c of children || []) n.appendChild(c);
   return n;
-}
-
-// type=time 은 placeholder가 잘 안 먹어서, 값이 없을 때 '--:--' 오버레이를 띄운다.
-function makeTimeDial(value, onCommit) {
-  const inp = el("input", {
-    class: "timeInput",
-    type: "time",
-    value: safeText(value),
-  });
-  const ph = el("span", { class: "timePlaceholder", text: "--:--" });
-  const wrap = el("div", { class: "timeWrap" }, [inp, ph]);
-
-  let last = safeText(value);
-  const sync = () => {
-    ph.style.display = inp.value ? "none" : "block";
-  };
-  sync();
-
-  const commit = async () => {
-    const v = safeText(inp.value);
-    if (v === last) return;
-    last = v;
-    if (typeof onCommit === "function") await onCommit(v);
-  };
-
-  inp.addEventListener("focus", () => { ph.style.display = "none"; });
-  inp.addEventListener("blur", () => { sync(); commit(); });
-  inp.addEventListener("change", () => { sync(); commit(); });
-  inp.addEventListener("input", sync);
-
-  return { wrap, input: inp, setValue: (v) => { inp.value = safeText(v); last = safeText(v); sync(); } };
 }
 
 /** =========================
@@ -642,22 +596,40 @@ menuSignOut?.addEventListener("click", async () => {
   if (!state.user) return;
   closeSettings();
   cleanupAllThumbBlobs();
+
+  // signOut은 네트워크/모듈 로드 문제로 실패할 수 있어,
+  // 실패하더라도 로컬 토큰/상태를 정리해서 반드시 로그아웃 상태로 만든다.
   try {
     await initSupabase();
     await supabase.auth.signOut();
   } catch (e) {
-    // supabase 모듈 로드 실패/네트워크 오류가 있어도 UI/상태는 로그아웃으로 정리한다.
-    console.warn("signOut failed", e);
-    try {
-      // supabase-js가 남긴 세션키(대부분 sb-<project>-auth-token)를 제거
-      for (let i = 0; i < (localStorage?.length || 0); i++) {
-        const k = localStorage.key(i);
-        if (k && /^sb-.*-auth-token$/i.test(k)) {
-          try { localStorage.removeItem(k); } catch (_) {}
-        }
-      }
-    } catch (_) {}
+    console.warn('signOut failed, force clearing:', e);
   }
+
+  // force clear auth tokens
+  try {
+    const keys = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k) continue;
+      if (/^sb-.*-auth-token$/i.test(k) || /^supabase\./i.test(k)) keys.push(k);
+    }
+    for (const k of keys) localStorage.removeItem(k);
+  } catch {}
+  try {
+    const keys = [];
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const k = sessionStorage.key(i);
+      if (!k) continue;
+      if (/^sb-.*-auth-token$/i.test(k) || /^supabase\./i.test(k)) keys.push(k);
+    }
+    for (const k of keys) sessionStorage.removeItem(k);
+  } catch {}
+
+  // reset in-memory client so next login starts clean
+  supabase = null;
+  __supabaseInitPromise = null;
+
   state.user = null;
   state.company = null;
   state.mode = null;
@@ -1506,8 +1478,10 @@ async function loadSession() {
 }
 
 async function loadCompanies() {
-  setFoot("회사 목록을 불러오는 중입니다...");
   try {
+    setFoot("회사 목록을 불러오는 중입니다...");
+    await initSupabase();
+    if (!state.user) await loadSession();
     state.companies = await fetchCompanies();
     setFoot("준비되었습니다.");
   } catch (e) {
@@ -1519,8 +1493,10 @@ async function loadCompanies() {
 
 async function loadJobs() {
   if (!state.company || !state.mode) return;
-  setFoot("현장 목록을 불러오는 중입니다...");
   try {
+    setFoot("현장 목록을 불러오는 중입니다...");
+    await initSupabase();
+    if (!state.user) await loadSession();
     state.jobs = await fetchJobs(state.company.id, state.mode);
     setFoot("준비되었습니다.");
   } catch (e) {
@@ -1657,7 +1633,8 @@ function renderAuth() {
         state.authMsg = "";
         setFoot("처리 중입니다...");
 
-        // supabase 동적 로딩 환경에서, 로그인/회원가입 클릭 시점에 클라이언트가 아직 없을 수 있음
+        // supabase client가 아직 초기화되지 않은 상태에서 로그인/회원가입을 누르면
+        // supabase가 null이라 인증 호출이 실패할 수 있어 먼저 보장한다.
         await initSupabase();
 
         const e = normEmail(email.value);
@@ -1696,19 +1673,8 @@ function renderAuth() {
         }
 
         // login
-        const { data, error } = await supabase.auth.signInWithPassword({ email: e, password: p });
+        const { error } = await supabase.auth.signInWithPassword({ email: e, password: p });
         if (error) throw error;
-        // iOS PWA/일부 환경에서 바로 다음 요청이 anon으로 나가서 "불러오기"가 비는 케이스 방지
-        if (data?.session?.access_token && data?.session?.refresh_token) {
-          try {
-            await supabase.auth.setSession({
-              access_token: data.session.access_token,
-              refresh_token: data.session.refresh_token,
-            });
-          } catch (e) {
-            console.warn("setSession after login failed:", e);
-          }
-        }
         await loadSession();
         await loadCompanies();
         render();
@@ -1794,7 +1760,12 @@ function renderModeSelect() {
         onclick: async () => {
           state.mode = "density";
           state.job = null;
-          await loadJobs();
+          try {
+            await loadJobs();
+          } catch (e) {
+            console.error(e);
+            setFoot(`현장 목록 불러오기 실패: ${e?.message || e}`);
+          }
           render();
         },
       }),
@@ -1804,7 +1775,12 @@ function renderModeSelect() {
         onclick: async () => {
           state.mode = "scatter";
           state.job = null;
-          await loadJobs();
+          try {
+            await loadJobs();
+          } catch (e) {
+            console.error(e);
+            setFoot(`현장 목록 불러오기 실패: ${e?.message || e}`);
+          }
           render();
         },
       }),
@@ -1979,13 +1955,14 @@ function renderJobWork() {
     inp.value = state.addLoc || "";
     locInput = inp;
   }
+  const timeInput = el("input", { class: "timeInput", placeholder: "시각(선택)", value: state.addTime || "" });
 
   const addSampleBtn = el("button", {
     class: "btn primary",
     text: "시료 추가",
     onclick: async () => {
       try {
-        const loc = state.mode === "scatter" ? safeText(locInput.value) : "";
+        const loc = safeText(locInput.value);
         const dateISO = state.activeDate || new Date().toISOString().slice(0, 10);
 
         setFoot("시료를 생성 중입니다...");
@@ -1993,6 +1970,13 @@ function renderJobWork() {
 
         // reload to get correct p_index & date lists
         await loadJob(job);
+
+        // time optional
+        const t = safeText(timeInput.value);
+        if (t) {
+          await updateSampleFields(newRow.id || newRow?.[0]?.id, { start_time: t });
+          await loadJob(job);
+        }
 
         setFoot("시료가 추가되었습니다.");
       } catch (e) {
@@ -2016,18 +2000,17 @@ function renderJobWork() {
     tabs,
     el("div", { class: "row", style: "margin-top:10px;" }, (() => {
       const cols = [];
-      if (state.mode === "scatter") {
+      cols.push(
+        el("div", { class: "col", style: "flex:1; min-width:240px;" }, [
+          el("div", { class: "label", text: state.mode === "scatter" ? ymdDots(state.activeDate) : `시료 추가 · ${ymdDots(state.activeDate)}` }),
+          locInput,
+        ])
+      );
+      if (state.mode !== "scatter") {
         cols.push(
-          el("div", { class: "col", style: "flex:1; min-width:240px;" }, [
-            el("div", { class: "label", text: ymdDots(state.activeDate) }),
-            locInput,
-          ])
-        );
-      } else {
-        // 농도: 시료추가 시 위치/시간 입력 제거(아래 등록된 시료에서 입력)
-        cols.push(
-          el("div", { class: "col", style: "flex:1; min-width:240px;" }, [
-            el("div", { class: "label", text: `시료 추가 · ${ymdDots(state.activeDate)}` }),
+          el("div", { class: "col" }, [
+            el("div", { class: "label", text: "시각(선택)" }),
+            timeInput,
           ])
         );
       }
@@ -2084,81 +2067,60 @@ function renderJobWork() {
         },
       });
 
-      const saveTime = async (v) => {
-        const nv = safeText(v);
-        if (nv === safeText(s.start_time)) return;
+      const saveTime = async (ev) => {
+        const v = safeText(ev.target.value);
+        if (v === safeText(s.start_time)) return;
         try {
-          await updateSampleFields(s.id, { start_time: nv });
-          s.start_time = nv;
+          await updateSampleFields(s.id, { start_time: v });
+          s.start_time = v;
         } catch (e) {
           console.error(e);
           alert(e?.message || String(e));
         }
       };
-      const timeDial = makeTimeDial(s.start_time, saveTime);
-      try { timeDial.input.setAttribute("aria-label", "측정시작시간"); } catch {}
-
-      const locTimeRow = el("div", { class: "row", style: "gap:8px; flex-wrap:nowrap;" }, [
-        el("div", { style: "flex:1; min-width:160px;" }, [locInp]),
-        el("div", { style: "width:120px;" }, [timeDial.wrap]),
-      ]);
-
-      left = el("div", { class: "sampleLeft" }, [
-        el("div", { class: "sampleTitle", text: `P${s.p_index || "?"}` }),
-        el("div", { class: "label", text: ymdDots(s.measurement_date) }),
-        locTimeRow,
-      ]);
-    } else {
-      // 비산: P1 부지경계선 등의 텍스트를 타이틀에 붙이지 않고, 아래에서 위치/측정시작시간을 입력
-      const locSel = el("select", {
-        class: "input",
-        onchange: async (ev) => {
-          const v = safeText(ev.target.value);
-          if (v === safeText(s.sample_location)) return;
-          try {
-            await updateSampleFields(s.id, { sample_location: v });
-            s.sample_location = v;
-          } catch (e) {
-            console.error(e);
-            alert(e?.message || String(e));
-          }
-        },
+      const tInp = el("input", {
+        class: "timeInput",
+        type: "time",
+        value: safeText(s.start_time),
+        onchange: saveTime,
+        onblur: saveTime,
       });
 
-      const curLoc = safeText(s.sample_location);
-      if (curLoc && !SCATTER_LOCATIONS.includes(curLoc)) {
-        locSel.appendChild(el("option", { value: curLoc, text: curLoc }));
-      }
-      for (const name of SCATTER_LOCATIONS) {
-        locSel.appendChild(el("option", { value: name, text: name }));
-      }
-      locSel.value = curLoc && (curLoc === locSel.value || SCATTER_LOCATIONS.includes(curLoc))
-        ? curLoc
-        : (SCATTER_LOCATIONS[0] || "");
-
-      const saveTime = async (v) => {
-        const nv = safeText(v);
-        if (nv === safeText(s.start_time)) return;
-        try {
-          await updateSampleFields(s.id, { start_time: nv });
-          s.start_time = nv;
-        } catch (e) {
-          console.error(e);
-          alert(e?.message || String(e));
-        }
-      };
-      const timeDial = makeTimeDial(s.start_time, saveTime);
-      try { timeDial.input.setAttribute("aria-label", "측정시작시간"); } catch {}
-
-      const locTimeRow = el("div", { class: "row", style: "gap:8px; flex-wrap:nowrap;" }, [
-        el("div", { style: "flex:1; min-width:160px;" }, [locSel]),
-        el("div", { style: "width:120px;" }, [timeDial.wrap]),
-      ]);
-
       left = el("div", { class: "sampleLeft" }, [
         el("div", { class: "sampleTitle", text: `P${s.p_index || "?"}` }),
         el("div", { class: "label", text: ymdDots(s.measurement_date) }),
-        locTimeRow,
+        locInp,
+        el("div", { class: "label", text: "측정시작시간" }),
+        tInp,
+      ]);
+    } else {
+      left = el("div", { class: "sampleLeft" }, [
+        el("div", { class: "sampleTitle", text: `P${s.p_index || "?"} · ${safeText(s.sample_location, "미입력")}` }),
+        el("div", { class: "sampleMeta" }, [
+          el("div", { class: "metaLine" }, [
+            el("span", { class: "label", text: ymdDots(s.measurement_date) }),
+          ]),
+          el("div", { class: "metaLine" }, [
+            el("span", { class: "label", text: "시각" }),
+            el("input", {
+              class: "timeInput",
+              value: safeText(s.start_time),
+              placeholder: "예: 10:30",
+              onblur: async (ev) => {
+                const v = safeText(ev.target.value);
+                if (v === safeText(s.start_time)) return;
+                try {
+                  await updateSampleFields(s.id, { start_time: v });
+                  s.start_time = v;
+                  setFoot("시각이 저장되었습니다.");
+                } catch (e) {
+                  console.error(e);
+                  setFoot(`저장 실패: ${e?.message || e}`);
+                }
+              },
+            }),
+          ]),
+        ]),
       ]);
     }
 
