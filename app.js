@@ -451,6 +451,7 @@ const state = {
 
   dates: [],
   activeDate: null,
+  dateDraft: null,
   samplesByDate: new Map(),
 
   authTab: "login", // login|signup
@@ -1452,6 +1453,22 @@ async function loadJobs() {
   setFoot("현장 목록을 불러오는 중입니다...");
   try {
     state.jobs = await fetchJobs(state.company.id, state.mode);
+
+    // 로그인 직후 토큰 반영이 늦으면(특히 PWA/WebView) RLS 때문에 200 + 빈 배열로 떨어질 수 있음.
+    // 에러가 안 나와서 catch가 안 타는 케이스라, '빈 목록'일 때 1회만 동기화 후 재조회한다.
+    if (state.user && Array.isArray(state.jobs) && state.jobs.length === 0) {
+      try {
+        const sess = (await supabase.auth.getSession())?.data?.session || null;
+        if (sess?.access_token) {
+          await syncSessionTokens(sess);
+          await new Promise((r) => setTimeout(r, 160));
+          const again = await fetchJobs(state.company.id, state.mode);
+          if (Array.isArray(again) && again.length) state.jobs = again;
+        }
+      } catch {
+        // best-effort only
+      }
+    }
   } catch (e) {
     // 로그인 직후(특히 iOS 홈화면/PWA/WebView) 토큰 반영 타이밍 때문에
     // RLS가 잠깐 막히는 케이스가 있어 1회만 재시도한다.
@@ -1506,6 +1523,7 @@ async function loadJob(job) {
   const dates = Array.from(new Set(samples.map((s) => s.measurement_date))).sort();
   state.dates = dates;
   state.activeDate = dates[0] || new Date().toISOString().slice(0, 10);
+  state.dateDraft = iso10(state.activeDate);
 
   for (const d of dates) state.samplesByDate.set(d, []);
   for (const s of samples) {
@@ -1526,6 +1544,10 @@ async function loadJob(job) {
 
     // 농도는 UI에서 사진 1장만 쓰므로, 과거 데이터의 role=single 은 measurement 로 정규화한다.
     const rawRole = p.role;
+
+    // 비산은 start/end만 사용: 과거 데이터의 single은 UI에서 제외
+    if (state.mode === "scatter" && rawRole === "single") continue;
+
     const role = (state.mode === "density" && rawRole === "single") ? "measurement" : rawRole;
 
     // 이미 measurement 가 있으면 single 은 무시(중복 슬롯 방지)
@@ -1541,6 +1563,8 @@ async function loadJob(job) {
     state.dates.unshift(state.activeDate);
     state.samplesByDate.set(state.activeDate, []);
   }
+
+  if (!state.dateDraft) state.dateDraft = iso10(state.activeDate);
 
   setFoot("불러오기가 완료되었습니다.");
   render();
@@ -1842,6 +1866,8 @@ function renderJobSelect() {
 function renderJobWork() {
   const job = state.job;
 
+  if (!state.dateDraft) state.dateDraft = iso10(state.activeDate);
+
   // date tabs
   const tabs = el("div", { class: "tabs", style: "margin:10px 0;" });
   for (const d of state.dates) {
@@ -1865,6 +1891,7 @@ function renderJobWork() {
           state.activeDate = state.dates[0] || new Date().toISOString().slice(0, 10);
           if (!state.samplesByDate.has(state.activeDate)) state.samplesByDate.set(state.activeDate, []);
         }
+        state.dateDraft = iso10(state.activeDate);
         render();
       },
     });
@@ -1874,6 +1901,7 @@ function renderJobWork() {
         type: "button",
         onclick: () => {
           state.activeDate = d;
+          state.dateDraft = iso10(d);
           state.addOpen = false;
           render();
         },
@@ -1887,15 +1915,25 @@ function renderJobWork() {
   const dateAdd = el("input", {
     class: "input",
     type: "date",
-    value: iso10(state.activeDate),
+    value: iso10(state.dateDraft || state.activeDate),
     onchange: () => {
-      const v = iso10(dateAdd.value);
+      state.dateDraft = iso10(dateAdd.value);
+    },
+  });
+
+  const applyDateBtn = el("button", {
+    class: "btn primary small dateApplyBtn",
+    type: "button",
+    text: "✓",
+    onclick: () => {
+      const v = iso10(state.dateDraft || dateAdd.value);
       if (!state.dates.includes(v)) {
         state.dates.push(v);
         state.dates.sort();
         state.samplesByDate.set(v, []);
       }
       state.activeDate = v;
+      state.dateDraft = v;
       render();
     },
   });
@@ -1926,6 +1964,19 @@ function renderJobWork() {
     locInput = sel;
   }
 
+  let addTimeInput = null;
+  if (state.mode === "scatter") {
+    addTimeInput = el("input", {
+      class: "timeInput",
+      type: "time",
+      step: "60",
+      value: safeText(state.addTime),
+      onchange: (ev) => {
+        state.addTime = ev.target.value || "";
+      },
+    });
+  }
+
   const addSampleBtn = el("button", {
     class: "btn primary",
     text: "시료 추가",
@@ -1939,6 +1990,17 @@ function renderJobWork() {
 
         // reload to get correct p_index & date lists
         await loadJob(job);
+
+        // 비산: 시각(선택)
+        if (state.mode === "scatter") {
+          const t = safeText(state.addTime);
+          const newId = newRow?.id || (Array.isArray(newRow) ? newRow?.[0]?.id : null);
+          if (t && newId) {
+            await updateSampleFields(newId, { start_time: t });
+            state.addTime = "";
+            await loadJob(job);
+          }
+        }
 
         setFoot("시료가 추가되었습니다.");
       } catch (e) {
@@ -1957,6 +2019,7 @@ function renderJobWork() {
       ]),
       el("div", { class: "row", style: "gap:8px;" }, [
         dateAdd,
+        applyDateBtn,
       ]),
     ]),
     tabs,
@@ -1965,6 +2028,10 @@ function renderJobWork() {
         el("div", { class: "label", text: `시료 추가 · ${ymdDots(state.activeDate)}` }),
         ...(locInput ? [locInput] : []),
       ]),
+      ...(addTimeInput ? [el("div", { class: "col" }, [
+        el("div", { class: "label", text: "시각(선택)" }),
+        addTimeInput,
+      ])] : []),
       el("div", { class: "col", style: "justify-content:flex-end;" }, [addSampleBtn]),
     ]),
   ]);
@@ -2014,32 +2081,6 @@ function renderJobWork() {
         el("span", { class: "label", text: ymdDots(s.measurement_date) }),
       ]),
     ];
-
-    if (state.mode !== "scatter") {
-      metaChildren.push(
-        el("div", { class: "metaLine" }, [
-          el("span", { class: "label", text: "시각" }),
-          el("input", {
-            class: "timeInput",
-            type: "time",
-            step: "60",
-            value: safeText(s.start_time),
-            onblur: async (ev) => {
-              const v = safeText(ev.target.value);
-              if (v === safeText(s.start_time)) return;
-              try {
-                await updateSampleFields(s.id, { start_time: v });
-                s.start_time = v;
-                setFoot("시각이 저장되었습니다.");
-              } catch (e) {
-                console.error(e);
-                setFoot(`저장 실패: ${e?.message || e}`);
-              }
-            },
-          }),
-        ])
-      );
-    }
 
     const left = el("div", { class: "sampleLeft" }, [
       titleEl,
