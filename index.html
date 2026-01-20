@@ -2,13 +2,10 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta http-equiv="Pragma" content="no-cache" />
-  <meta http-equiv="Expires" content="0" />
-  <meta name="color-scheme" content="light" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="light" />
   <title>Asbestos field photos</title>
-  <link rel="stylesheet" href="./styles.css?v=20260120-02" />
+  <link rel="stylesheet" href="./styles.css?v=20260120-03" />
   <link rel="icon" href="./favicon.ico" />
   <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
   <link rel="manifest" href="./manifest.json" />
@@ -90,28 +87,6 @@
     </div>
   </div>
 
-  <!-- 날짜 관리 모달(달력 + 날짜 삭제) -->
-  <div id="dateModal" class="modal" hidden>
-    <div class="modal-backdrop"></div>
-    <div class="modal-card date-card">
-      <div class="modal-head">
-        <div class="modal-title">날짜 선택</div>
-        <button id="dateModalClose" class="btn ghost" type="button">닫기</button>
-      </div>
-      <div class="modal-body">
-        <div class="datePickRow">
-          <input id="dateModalInput" class="input" type="date" />
-        </div>
-        <div class="label" style="margin-top:10px;">등록된 날짜</div>
-        <div id="dateModalList" class="dateChipList"></div>
-      </div>
-      <div class="modal-actions">
-        <div></div>
-        <button id="dateModalCheck" class="btn primary" type="button" aria-label="확인">✓</button>
-      </div>
-    </div>
-  </div>
-
   <!--
     전사 공통 설정 (직원/다른 PC 포함)
     - NAS에서 GitHub Pages를 리버스 프록시로 제공하는 경우, 기본값(현재 도메인)이 자동으로 NAS 업로드로 동작합니다.
@@ -125,7 +100,44 @@
       NAS_DELETE_URL: "",
     };
   </script>
-
-  <script type="module" src="./app.js?v=20260120-02"></script>
+  <!-- Supabase(UMD) 로더: file:// / PWA 안정화 -->
+  <script>
+  (function(){
+    function setFoot(msg){ try{ var el=document.getElementById('footStatus'); if(el) el.textContent=msg; }catch(e){} }
+    function loadScript(src){
+      return new Promise(function(resolve,reject){
+        var s=document.createElement('script');
+        s.src=src;
+        s.async=true;
+        s.onload=function(){ resolve(src); };
+        s.onerror=function(){ reject(new Error('load fail: '+src)); };
+        document.head.appendChild(s);
+      });
+    }
+    var v='20260120-03';
+    var candidates=[
+      './vendor/supabase.umd.js?v='+v,
+      'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js'
+    ];
+    (async function(){
+      try{
+        for (var i=0;i<candidates.length;i++) {
+          try{
+            await loadScript(candidates[i]);
+            if (window.supabase && window.supabase.createClient) break;
+          }catch(e){}
+        }
+        if (!(window.supabase && window.supabase.createClient)) {
+          setFoot('Supabase 로드 실패 (네트워크/캐시)');
+          return;
+        }
+        await loadScript('./app.js?v='+v);
+      }catch(e){
+        console.error(e);
+        setFoot('앱 로드 실패: '+(e && e.message ? e.message : e));
+      }
+    })();
+  })();
+  </script>
 </body>
 </html>
