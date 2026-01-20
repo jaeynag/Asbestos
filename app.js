@@ -1629,6 +1629,9 @@ function renderAuth() {
         state.authMsg = "";
         setFoot("처리 중입니다...");
 
+        // supabase 동적 로딩 환경에서, 로그인/회원가입 클릭 시점에 클라이언트가 아직 없을 수 있음
+        await initSupabase();
+
         const e = normEmail(email.value);
         const p = pw.value || "";
         if (!e || !p) throw new Error("이메일과 비밀번호를 입력해 주세요.");
