@@ -725,7 +725,8 @@ menuSignOut?.addEventListener("click", async () => {
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
       if (!k) continue;
-      if (/^sb-.*-auth-token$/i.test(k) || /^supabase\./i.test(k)) keys.push(k);
+      // 환경/버전별로 auth-token 키에 접미사가 붙는 경우가 있어 prefix 매칭으로 제거한다.
+      if (/^sb-.*-auth-token/i.test(k) || /^supabase\./i.test(k)) keys.push(k);
     }
     for (const k of keys) localStorage.removeItem(k);
   } catch {}
@@ -734,7 +735,7 @@ menuSignOut?.addEventListener("click", async () => {
     for (let i = 0; i < sessionStorage.length; i++) {
       const k = sessionStorage.key(i);
       if (!k) continue;
-      if (/^sb-.*-auth-token$/i.test(k) || /^supabase\./i.test(k)) keys.push(k);
+      if (/^sb-.*-auth-token/i.test(k) || /^supabase\./i.test(k)) keys.push(k);
     }
     for (const k of keys) sessionStorage.removeItem(k);
   } catch {}
@@ -1903,31 +1904,43 @@ function renderModeSelect() {
       el("button", {
         class: "tab" + (state.mode === "density" ? " active" : ""),
         text: "농도",
-        onclick: async () => {
+        onclick: () => {
+          // (중요) 로딩/네트워크가 지연되면 await 때문에 화면이 그대로 멈춘 것처럼 보여
+          // 먼저 화면을 "현장 목록"으로 전환하고, 뒤에서 로딩을 수행한다.
           state.mode = "density";
           state.job = null;
-          try {
-            await loadJobs();
-          } catch (e) {
-            console.error(e);
-            setFoot(`현장 목록 불러오기 실패: ${e?.message || e}`);
-          }
+          state.jobs = [];
           render();
+
+          (async () => {
+            try {
+              await loadJobs();
+            } catch (e) {
+              console.error(e);
+              setFoot(`현장 목록 불러오기 실패: ${e?.message || e}`);
+            }
+            render();
+          })();
         },
       }),
       el("button", {
         class: "tab" + (state.mode === "scatter" ? " active" : ""),
         text: "비산",
-        onclick: async () => {
+        onclick: () => {
           state.mode = "scatter";
           state.job = null;
-          try {
-            await loadJobs();
-          } catch (e) {
-            console.error(e);
-            setFoot(`현장 목록 불러오기 실패: ${e?.message || e}`);
-          }
+          state.jobs = [];
           render();
+
+          (async () => {
+            try {
+              await loadJobs();
+            } catch (e) {
+              console.error(e);
+              setFoot(`현장 목록 불러오기 실패: ${e?.message || e}`);
+            }
+            render();
+          })();
         },
       }),
     ]),
