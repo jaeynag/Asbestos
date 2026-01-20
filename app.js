@@ -18,15 +18,18 @@
 //   - Supabase Storage: "companyId/mode/jobId/.../role.jpg" (상대경로)
 //   - NAS:             "https://.../files/.../role.jpg" (URL)
 
-// NOTE: iOS 홈화면(PWA)/일부 WebView에서 외부 ESM CDN 로드가 간헐적으로 실패하는 케이스가 있어
-// supabase-js는 동적 import로 로드합니다(로컬 파일 우선, 실패 시 CDN).
+// NOTE: supabase-js는 동적 import로 로드합니다.
+// GitHub Pages에서 ./vendor/* 파일이 없으면 404가 발생하므로 CDN을 먼저 시도하고,
+// 로컬 vendor는 "있을 때만" fallback으로 둡니다.
 async function loadSupabaseModule() {
   const candidates = [
-    // 로컬로 번들해두면 PWA 안정성이 확 올라감(추천)
+    // CDN (우선) - 배포환경에서 vendor 파일이 없을 수 있음
+    "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm",
+    "https://esm.sh/@supabase/supabase-js@2",
+    "https://unpkg.com/@supabase/supabase-js@2/+esm",
+    // 로컬 vendor (있으면 PWA 안정성 향상)
     "./vendor/supabase-js@2.esm.js",
     "./vendor/supabase-js@2/+esm.js",
-    // 최후 fallback
-    "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm",
   ];
   let lastErr = null;
   for (const url of candidates) {
