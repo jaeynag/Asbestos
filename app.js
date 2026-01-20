@@ -18,7 +18,27 @@
 //   - Supabase Storage: "companyId/mode/jobId/.../role.jpg" (상대경로)
 //   - NAS:             "https://.../files/.../role.jpg" (URL)
 
-import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+// NOTE: iOS 홈화면(PWA)/일부 WebView에서 외부 ESM CDN 로드가 간헐적으로 실패하는 케이스가 있어
+// supabase-js는 동적 import로 로드합니다(로컬 파일 우선, 실패 시 CDN).
+async function loadSupabaseModule() {
+  const candidates = [
+    // 로컬로 번들해두면 PWA 안정성이 확 올라감(추천)
+    "./vendor/supabase-js@2.esm.js",
+    "./vendor/supabase-js@2/+esm.js",
+    // 최후 fallback
+    "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm",
+  ];
+  let lastErr = null;
+  for (const url of candidates) {
+    try {
+      return await import(url);
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error("supabase-js 모듈을 로드하지 못했습니다.");
+}
+
 
 /** =========================
  *  Config
@@ -51,7 +71,9 @@ function _trim(v) {
   return String(v ?? "").trim();
 }
 function _normBase(v) {
-  return _trim(v).replace(/\/$/, "");
+  const s = _trim(v);
+  if (!s || s === 'null') return '';
+  return s.replace(/\/$/, '');
 }
 function _isGithubIoHost() {
   try {
@@ -59,6 +81,19 @@ function _isGithubIoHost() {
   } catch {
     return false;
   }
+}
+function _safeOrigin() {
+  try {
+    if (typeof location !== 'undefined') {
+      if (location.protocol === 'file:') return '';
+      const o = _trim(location.origin);
+      if (!o || o === 'null') return '';
+      return o;
+    }
+  } catch {
+    // ignore
+  }
+  return '';
 }
 
 // iOS PWA/일부 WebView에서 localStorage 접근이 SecurityError로 터지는 케이스 방어
@@ -83,7 +118,7 @@ const CFG_FILE_BASE = _trim(APP_CONFIG.NAS_FILE_BASE);
 const CFG_DELETE = _trim(APP_CONFIG.NAS_DELETE_URL);
 const CFG_AUTH = _trim(APP_CONFIG.NAS_AUTH_TOKEN);
 
-const AUTO_GATEWAY = _isGithubIoHost() ? "" : _trim(location.origin);
+const AUTO_GATEWAY = _isGithubIoHost() ? '' : _safeOrigin();
 
 const NAS_GATEWAY_URL = _normBase(LS_GATEWAY || CFG_GATEWAY || AUTO_GATEWAY);
 const NAS_UPLOAD_URL = _trim(LS_UPLOAD || CFG_UPLOAD || (NAS_GATEWAY_URL ? `${NAS_GATEWAY_URL}/upload` : ""));
@@ -99,7 +134,8 @@ async function getNasAuthorization() {
     return `Bearer ${raw}`;
   }
   try {
-    const { data } = await supabase.auth.getSession();
+    const sb = await initSupabase();
+    const { data } = await sb.auth.getSession();
     const token = data?.session?.access_token;
     if (token) return `Bearer ${token}`;
   } catch {
@@ -151,9 +187,9 @@ function formatFastApiDetail(detail) {
   return String(detail || "");
 }
 
-function setFoot(msg) {
-  const el = document.getElementById("footStatus");
-  if (el) el.textContent = msg;
+function setFoot(_msg) {
+  // 하단 알림문구 제거(요청사항)
+  return;
 }
 
 function normEmail(v) {
@@ -180,112 +216,139 @@ function el(tag, attrs = {}, children = []) {
   return n;
 }
 
-function makeSwipeItem(contentEl, onDelete) {
-  const wrap = el("div", { class: "swipeItem" });
-  const actions = el("div", { class: "swipeActions" }, [
-    el("button", {
-      class: "swipeDeleteBtn",
-      text: "삭제",
-      onclick: () => {
-        try { wrap.classList.remove("open"); } catch {}
-        if (_openSwipeItem === wrap) _openSwipeItem = null;
-        onDelete();
-      },
-    }),
-  ]);
+/** =========================
+ *  Swipe to delete (jobs/samples)
+ *  ========================= */
+const SWIPE_ACTION_WIDTH = 92;
+let __openSwipeRow = null;
 
-  const content = el("div", { class: "swipeContent" }, [contentEl]);
+function closeSwipeRow(row) {
+  if (!row) return;
+  const content = row.__swipeContent;
+  if (!content) return;
+  row.__swipeOpen = false;
+  content.style.transition = 'transform 0.18s ease';
+  content.style.transform = 'translateX(0px)';
+  if (__openSwipeRow === row) __openSwipeRow = null;
+}
 
-  // 터치 스와이프 (좌로만)
-  let startX = 0;
-  let startY = 0;
-  let dragging = false;
-  let started = false;
-  const maxX = 88;
+function openSwipeRow(row) {
+  if (!row) return;
+  const content = row.__swipeContent;
+  if (!content) return;
+  if (__openSwipeRow && __openSwipeRow !== row) closeSwipeRow(__openSwipeRow);
+  row.__swipeOpen = true;
+  __openSwipeRow = row;
+  content.style.transition = 'transform 0.18s ease';
+  content.style.transform = `translateX(${-SWIPE_ACTION_WIDTH}px)`;
+}
 
-  const close = () => {
-    try { wrap.classList.remove("open"); } catch {}
-    content.style.transform = "translateX(0px)";
-    content.style.transition = "transform .15s ease";
-    if (_openSwipeItem === wrap) _openSwipeItem = null;
-  };
-
-  const open = () => {
-    if (_openSwipeItem && _openSwipeItem !== wrap) {
-      try { _openSwipeItem.classList.remove("open"); } catch {}
-      try {
-        const c = _openSwipeItem.querySelector(".swipeContent");
-        if (c) c.style.transform = "translateX(0px)";
-      } catch {}
-    }
-    _openSwipeItem = wrap;
-    try { wrap.classList.add("open"); } catch {}
-    content.style.transform = `translateX(-${maxX}px)`;
-    content.style.transition = "transform .15s ease";
-  };
-
-  const onTouchStart = (e) => {
-    const t = e.touches?.[0];
-    if (!t) return;
-    startX = t.clientX;
-    startY = t.clientY;
-    dragging = false;
-    started = true;
-    content.style.transition = "none";
-  };
-  const onTouchMove = (e) => {
-    if (!started) return;
-    const t = e.touches?.[0];
-    if (!t) return;
-    const dx = t.clientX - startX;
-    const dy = t.clientY - startY;
-
-    // 세로 스크롤 우선
-    if (!dragging) {
-      if (Math.abs(dx) < 8) return;
-      if (Math.abs(dx) < Math.abs(dy)) {
-        started = false;
-        content.style.transition = "transform .15s ease";
-        return;
-      }
-      dragging = true;
-    }
-
-    e.preventDefault();
-
-    const isOpen = wrap.classList.contains("open");
-    const base = isOpen ? -maxX : 0;
-    let x = base + dx;
-    if (x > 0) x = 0;
-    if (x < -maxX) x = -maxX;
-    content.style.transform = `translateX(${x}px)`;
-  };
-  const onTouchEnd = () => {
-    if (!started) return;
-    started = false;
-    const m = /translateX\((-?\d+(?:\.\d+)?)px\)/.exec(content.style.transform || "");
-    const x = m ? Number(m[1]) : 0;
-    if (x <= -maxX / 2) open();
-    else close();
-  };
-
-  content.addEventListener("touchstart", onTouchStart, { passive: true });
-  content.addEventListener("touchmove", onTouchMove, { passive: false });
-  content.addEventListener("touchend", onTouchEnd, { passive: true });
-  content.addEventListener("touchcancel", onTouchEnd, { passive: true });
-
-  // 열린 상태에서 내용 영역 터치 시 닫기
-  content.addEventListener("click", (e) => {
-    if (wrap.classList.contains("open")) {
-      // 삭제 버튼 클릭은 예외
-      if (e.target && e.target.closest && e.target.closest(".swipeDeleteBtn")) return;
-      close();
-    }
+function createSwipeRow(contentInner, onDelete) {
+  const delBtn = el('button', {
+    class: 'swipeDeleteBtn',
+    text: '삭제',
+    onclick: (ev) => {
+      ev.stopPropagation();
+      if (__openSwipeRow) closeSwipeRow(__openSwipeRow);
+      onDelete && onDelete();
+    },
+    type: 'button',
   });
 
-  wrap.appendChild(actions);
-  wrap.appendChild(content);
-  return wrap;
+  const actions = el('div', { class: 'swipeActions' }, [delBtn]);
+  const content = el('div', { class: 'swipeContent' }, [contentInner]);
+  const row = el('div', { class: 'swipeRow' }, [actions, content]);
+
+  row.__swipeContent = content;
+  row.__swipeOpen = false;
+
+  let startX = 0;
+  let startY = 0;
+  let lastX = 0;
+  let dragging = false;
+
+  const onDown = (x, y) => {
+    startX = x;
+    startY = y;
+    lastX = row.__swipeOpen ? -SWIPE_ACTION_WIDTH : 0;
+    dragging = false;
+    if (__openSwipeRow && __openSwipeRow !== row) closeSwipeRow(__openSwipeRow);
+  };
+
+  const onMove = (x, y, ev) => {
+    const dx = x - startX;
+    const dy = y - startY;
+    if (!dragging) {
+      if (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy) + 4) {
+        dragging = true;
+        row.classList.add('dragging');
+      } else {
+        return;
+      }
+    }
+    ev && ev.preventDefault && ev.preventDefault();
+    let nx = lastX + dx;
+    if (nx < -SWIPE_ACTION_WIDTH) nx = -SWIPE_ACTION_WIDTH;
+    if (nx > 0) nx = 0;
+    content.style.transition = 'none';
+    content.style.transform = `translateX(${nx}px)`;
+    row.__swipeLiveX = nx;
+  };
+
+  const onUp = () => {
+    row.classList.remove('dragging');
+    const nx = typeof row.__swipeLiveX === 'number' ? row.__swipeLiveX : (row.__swipeOpen ? -SWIPE_ACTION_WIDTH : 0);
+    row.__swipeLiveX = null;
+    if (!dragging) {
+      // 탭으로 닫기
+      if (row.__swipeOpen) closeSwipeRow(row);
+      return;
+    }
+    dragging = false;
+    if (nx < -SWIPE_ACTION_WIDTH * 0.45) openSwipeRow(row);
+    else closeSwipeRow(row);
+  };
+
+  const isIOS = (() => {
+    try {
+      const ua = navigator.userAgent || "";
+      const plat = navigator.platform || "";
+      const iDevice = /iP(hone|od|ad)/.test(plat) || /iP(hone|od|ad)/.test(ua);
+      const iPadOS13 = !iDevice && /Mac/.test(plat) && ("ontouchend" in document);
+      return iDevice || iPadOS13;
+    } catch {
+      return false;
+    }
+  })();
+
+  const usePointer = !!window.PointerEvent && !isIOS;
+
+  if (usePointer) {
+    content.addEventListener('pointerdown', (ev) => {
+      if (ev.pointerType === 'mouse' && ev.button !== 0) return;
+      onDown(ev.clientX, ev.clientY);
+      try { content.setPointerCapture(ev.pointerId); } catch {}
+    });
+    content.addEventListener('pointermove', (ev) => onMove(ev.clientX, ev.clientY, ev));
+    content.addEventListener('pointerup', onUp);
+    content.addEventListener('pointercancel', onUp);
+  } else {
+    // fallback (old iOS)
+    content.addEventListener('touchstart', (ev) => {
+      const t = ev.touches && ev.touches[0];
+      if (!t) return;
+      onDown(t.clientX, t.clientY);
+    }, { passive: true });
+    content.addEventListener('touchmove', (ev) => {
+      const t = ev.touches && ev.touches[0];
+      if (!t) return;
+      onMove(t.clientX, t.clientY, ev);
+    }, { passive: false });
+    content.addEventListener('touchend', onUp);
+    content.addEventListener('touchcancel', onUp);
+  }
+
+  return row;
 }
 
 function dotClass(status) {
@@ -343,14 +406,31 @@ function safeStorage() {
   }
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-  auth: {
-    persistSession: true,
-    autoRefreshToken: true,
-    detectSessionInUrl: true,
-    storage: safeStorage(),
-  },
-});
+let supabase = null;
+let __supabaseInitPromise = null;
+
+async function initSupabase() {
+  if (supabase) return supabase;
+  if (__supabaseInitPromise) return __supabaseInitPromise;
+  __supabaseInitPromise = (async () => {
+    const mod = await loadSupabaseModule();
+    const createClient = mod?.createClient || mod?.default?.createClient;
+    if (typeof createClient !== "function") {
+      throw new Error("supabase-js createClient를 찾지 못했습니다.");
+    }
+    supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+        storage: safeStorage(),
+      },
+    });
+    return supabase;
+  })();
+  return __supabaseInitPromise;
+}
+
 
 /** =========================
  *  State
@@ -375,6 +455,8 @@ const state = {
   addLoc: "",
   addTime: "",
 
+  pendingDate: null,
+
   pending: null,
 
   viewer: {
@@ -386,9 +468,6 @@ const state = {
     objectUrl: null,
   },
 };
-
-// 스와이프 삭제: 동시에 하나만 열리게
-let _openSwipeItem = null;
 
 /** =========================
  *  DOM refs
@@ -460,12 +539,14 @@ function goBack() {
   }
 
   if (state.job) {
+    cleanupAllThumbBlobs();
     state.job = null;
     state.addOpen = false;
     render();
     return;
   }
   if (state.mode) {
+    cleanupAllThumbBlobs();
     state.mode = null;
     state.job = null;
     state.addOpen = false;
@@ -473,6 +554,7 @@ function goBack() {
     return;
   }
   if (state.company) {
+    cleanupAllThumbBlobs();
     state.company = null;
     state.mode = null;
     state.job = null;
@@ -490,6 +572,7 @@ menuChangeMode?.addEventListener("click", () => {
   closeSettings();
   if (!state.mode) return;
   if (!confirm("업무를 변경하시겠습니까?")) return;
+  cleanupAllThumbBlobs();
   state.mode = null;
   state.job = null;
   state.addOpen = false;
@@ -501,6 +584,7 @@ menuChangeCompany?.addEventListener("click", () => {
   closeSettings();
   if (!state.company) return;
   if (!confirm("회사를 변경하시겠습니까?")) return;
+  cleanupAllThumbBlobs();
   state.company = null;
   state.mode = null;
   state.job = null;
@@ -511,6 +595,8 @@ menuChangeCompany?.addEventListener("click", () => {
 menuSignOut?.addEventListener("click", async () => {
   if (!state.user) return;
   closeSettings();
+  cleanupAllThumbBlobs();
+  await initSupabase();
   await supabase.auth.signOut();
   state.user = null;
   state.company = null;
@@ -564,8 +650,8 @@ function viewerRoleOrder(sample) {
     // 농도는 사진 1장만: UI/뷰어에서는 항상 measurement 슬롯만 사용
     return ["measurement"];
   }
-  // 비산은 start/end만 사용 (single 슬롯 사용 금지)
-  return ["start", "end"];
+  // 비산은 start/end 2장만 사용
+  return ['start', 'end'];
 }
 function buildViewerItemsForDate(dateISO) {
   const samples = state.samplesByDate.get(dateISO) || [];
@@ -1008,6 +1094,54 @@ async function nasFetchBlobUrl(relPath) {
 /** =========================
  *  Thumbnails
  *  ========================= */
+// NAS 인증 필요 환경에서 썸네일을 blob URL로 만들어 쓸 수 있다.
+// 이 blob URL을 정리하지 않으면(특히 iOS) 메모리 누적으로 탭이 리프레시/크래시 날 수 있어
+// job/회사/로그아웃 전환 시 정리 루틴을 둔다.
+// (viewer는 state.viewer.objectUrl로 별도 관리)
+const __thumbBlobUrls = new Set();
+
+function _revokeBlobUrl(url) {
+  if (typeof url === "string" && url.startsWith("blob:")) {
+    try { URL.revokeObjectURL(url); } catch {}
+    try { __thumbBlobUrls.delete(url); } catch {}
+  }
+}
+
+function _withThumbVer(sample, role, url) {
+  const ver = sample?._thumbVer?.[role] || 0;
+  if (!ver) return url;
+  if (typeof url === 'string' && url.startsWith('blob:')) return url;
+  try {
+    const u = new URL(String(url), location.href);
+    u.searchParams.set('__v', String(ver));
+    return u.toString();
+  } catch {
+    const s = String(url);
+    const sep = s.includes('?') ? '&' : '?';
+    return s + sep + '__v=' + encodeURIComponent(String(ver));
+  }
+}
+
+function _setThumbUrl(sample, role, url, expMs) {
+  sample._thumbUrl ||= {};
+  sample._thumbExp ||= {};
+  const prev = sample._thumbUrl[role];
+  if (prev && prev !== url) _revokeBlobUrl(prev);
+  const finalUrl = _withThumbVer(sample, role, url);
+
+  sample._thumbUrl[role] = finalUrl;
+  sample._thumbExp[role] = expMs;
+  if (typeof finalUrl === 'string' && finalUrl.startsWith('blob:')) __thumbBlobUrls.add(finalUrl);
+}
+
+function cleanupAllThumbBlobs() {
+  // 전환 시 대량 정리가 필요하니 Set으로만 관리한다.
+  for (const url of Array.from(__thumbBlobUrls)) {
+    _revokeBlobUrl(url);
+  }
+  __thumbBlobUrls.clear();
+}
+
 function ensureThumbUrl(sample, role) {
   const path = sample._photoPath?.[role];
   if (!path) return;
@@ -1018,8 +1152,7 @@ function ensureThumbUrl(sample, role) {
 
   // full URL이면 그대로
   if (isHttpUrl(path)) {
-    sample._thumbUrl[role] = path;
-    sample._thumbExp[role] = Date.now() + 365 * 24 * 3600 * 1000;
+    _setThumbUrl(sample, role, path, Date.now() + 365 * 24 * 3600 * 1000);
     return;
   }
 
@@ -1038,16 +1171,14 @@ function ensureThumbUrl(sample, role) {
       try {
         // 1) public URL로 먼저 세팅 (NAS가 public 허용이면 이걸로 끝)
         if (NAS_FILE_BASE) {
-          sample._thumbUrl[role] = joinUrl(NAS_FILE_BASE, rel);
-          sample._thumbExp[role] = Date.now() + 365 * 24 * 3600 * 1000;
+          _setThumbUrl(sample, role, joinUrl(NAS_FILE_BASE, rel), Date.now() + 365 * 24 * 3600 * 1000);
         }
 
         // 2) public이 막혀있으면 img는 깨짐 → Authorization으로 blob URL 생성해서 교체
         const auth = await getNasAuthorization();
         if (auth) {
           const blobUrl = await nasFetchBlobUrl(rel);
-          sample._thumbUrl[role] = blobUrl;
-          sample._thumbExp[role] = Date.now() + 365 * 24 * 3600 * 1000;
+          _setThumbUrl(sample, role, blobUrl, Date.now() + 365 * 24 * 3600 * 1000);
         }
       } catch (e) {
         console.warn("NAS 썸네일 생성 실패:", e);
@@ -1070,8 +1201,7 @@ function ensureThumbUrl(sample, role) {
   (async () => {
     try {
       const url = await getSignedUrl(path);
-      sample._thumbUrl[role] = url;
-      sample._thumbExp[role] = Date.now() + SIGNED_URL_TTL_SEC * 1000;
+      _setThumbUrl(sample, role, url, Date.now() + SIGNED_URL_TTL_SEC * 1000);
     } catch (e) {
       console.error("Signed URL 생성 실패:", e);
     } finally {
@@ -1125,6 +1255,20 @@ async function uploadAndBindPhoto(sample, role, file) {
 
     sample._photoState[role] = "done";
     sample._photoPath[role] = row?.storage_path || storedPath;
+
+    // 썸네일 캐시 무효화(재촬영 시 썸네일이 안 바뀌는 문제 방지)
+    sample._thumbVer ||= {};
+    sample._thumbVer[role] = (sample._thumbVer[role] || 0) + 1;
+    try {
+      sample._thumbExp ||= {};
+      sample._thumbUrl ||= {};
+      const prev = sample._thumbUrl[role];
+      if (prev) _revokeBlobUrl(prev);
+      delete sample._thumbUrl[role];
+      sample._thumbExp[role] = 0;
+    } catch {
+      // ignore
+    }
 
     ensureThumbUrl(sample, role);
     setFoot("업로드가 완료되었습니다.");
@@ -1315,6 +1459,9 @@ async function loadJobs() {
 }
 
 async function loadJob(job) {
+  // 다른 현장/날짜를 여러 번 넘나들면 NAS 썸네일 blob URL이 누적될 수 있어 전환 시 정리
+  cleanupAllThumbBlobs();
+  if (state.viewer.open) closeViewer();
   state.job = job;
   state.samplesByDate = new Map();
   state.dates = [];
@@ -1347,18 +1494,12 @@ async function loadJob(job) {
     const s = byId.get(p.sample_id);
     if (!s) continue;
 
-    // role 정규화
+    // 농도는 UI에서 사진 1장만 쓰므로, 과거 데이터의 role=single 은 measurement 로 정규화한다.
     const rawRole = p.role;
-    let role = rawRole;
+    const role = (state.mode === "density" && rawRole === "single") ? "measurement" : rawRole;
 
-    // 농도는 UI에서 사진 1장만 쓰므로, 과거 데이터의 role=single 은 measurement 로 정규화
-    if (state.mode === "density" && rawRole === "single") role = "measurement";
-
-    // 비산은 single 슬롯을 쓰지 않으므로, 과거 데이터의 role=single 은 end로 흡수
-    if (state.mode === "scatter" && rawRole === "single") role = "end";
-
-    // 중복 슬롯 방지: 이미 동일 role이 있으면 무시
-    if (s._photoPath[role]) continue;
+    // 이미 measurement 가 있으면 single 은 무시(중복 슬롯 방지)
+    if (state.mode === "density" && rawRole === "single" && s._photoPath["measurement"]) continue;
 
     s._photoState[role] = p.state === "failed" ? "failed" : "done";
     s._photoPath[role] = p.storage_path;
@@ -1525,19 +1666,26 @@ function renderCompanySelect() {
       list.appendChild(
         el("div", { class: "item" }, [
           el("div", {}, [
-            el("div", { class: "item-title", text: c.name }),
+            el("div", { class: "item-title", text: safeText(c.name, "(회사)") }),
+            el("div", { class: "item-sub", text: "선택" }),
           ]),
-          el("button", {
-            class: "btn primary",
-            text: "선택",
-            onclick: async () => {
-              state.company = c;
-              state.mode = null;
-              state.job = null;
-              await loadJobs().catch(() => null);
-              render();
-            },
-          }),
+          el("div", { class: "row", style: "gap:8px;" }, [
+            el("button", {
+              class: "btn primary small",
+              text: "선택",
+              onclick: async () => {
+                cleanupAllThumbBlobs();
+                state.company = c;
+                state.mode = null;
+                state.job = null;
+                state.jobs = [];
+                state.samplesByDate = new Map();
+                state.dates = [];
+                state.activeDate = null;
+                render();
+              },
+            }),
+          ]),
         ])
       );
     }
@@ -1638,33 +1786,29 @@ function renderJobSelect() {
     for (const j of state.jobs) {
       const sub = [safeText(j.address), safeText(j.contractor)].filter(Boolean).join(" · ");
 
-      list.appendChild(
-        el("div", { class: "item" }, [
-          el("div", {}, [
-            el("div", { class: "item-title", text: safeText(j.project_name, "(이름없음)") }),
-            el("div", { class: "item-sub", text: sub || `생성: ${String(j.created_at || "").slice(0, 10)}` }),
-          ]),
-          el("div", { class: "row", style: "gap:8px;" }, [
-            el("button", {
-              class: "btn small",
-              text: "삭제",
-              onclick: () => deleteJobAndRelated(j),
-            }),
-            el("button", {
-              class: "btn primary small",
-              text: "열기",
-              onclick: async () => {
-                try {
-                  await loadJob(j);
-                } catch (e) {
-                  console.error(e);
-                  setFoot(e?.message || String(e));
-                }
-              },
-            }),
-          ]),
-        ])
-      );
+      const content = el("div", { class: "item" }, [
+        el("div", {}, [
+          el("div", { class: "item-title", text: safeText(j.project_name, "(이름없음)") }),
+          el("div", { class: "item-sub", text: sub || `생성: ${String(j.created_at || "").slice(0, 10)}` }),
+        ]),
+        el("div", { class: "row", style: "gap:8px;" }, [
+          el("button", {
+            class: "btn primary small",
+            text: "열기",
+            onclick: async (ev) => {
+              ev.stopPropagation();
+              try {
+                await loadJob(j);
+              } catch (e) {
+                console.error(e);
+                alert(e?.message || String(e));
+              }
+            },
+          }),
+        ]),
+      ]);
+
+      list.appendChild(createSwipeRow(content, () => deleteJobAndRelated(j)));
     }
   }
 
@@ -1695,18 +1839,24 @@ function renderJobWork() {
   const dateAdd = el("input", {
     class: "input",
     type: "date",
-    value: iso10(state.activeDate),
-    onchange: () => {
-      const v = iso10(dateAdd.value);
-      if (!state.dates.includes(v)) {
-        state.dates.push(v);
-        state.dates.sort();
-        state.samplesByDate.set(v, []);
-      }
-      state.activeDate = v;
+    value: iso10(state.pendingDate || state.activeDate),
+    onchange: (ev) => {
+      state.pendingDate = iso10(ev.target.value);
       render();
     },
   });
+
+  const applyPendingDate = () => {
+    const v = iso10(state.pendingDate || state.activeDate);
+    if (!state.dates.includes(v)) {
+      state.dates.push(v);
+      state.dates.sort();
+      state.samplesByDate.set(v, []);
+    }
+    state.activeDate = v;
+    state.pendingDate = null;
+    render();
+  };
 
   // add sample
   const SCATTER_LOCATIONS = [
@@ -1719,7 +1869,7 @@ function renderJobWork() {
     "폐기물 보관지점",
   ];
 
-  let locInput = null;
+  let locInput;
   if (state.mode === "scatter") {
     const sel = el("select", {
       class: "input",
@@ -1732,14 +1882,25 @@ function renderJobWork() {
     }
     sel.value = state.addLoc && SCATTER_LOCATIONS.includes(state.addLoc) ? state.addLoc : SCATTER_LOCATIONS[0];
     locInput = sel;
+  } else {
+    const inp = el("input", {
+      class: "input",
+      placeholder: "시료 위치(예: 거실, 주방...)",
+      oninput: (ev) => {
+        state.addLoc = ev.target.value;
+      },
+    });
+    inp.value = state.addLoc || "";
+    locInput = inp;
   }
+  const timeInput = el("input", { class: "timeInput", placeholder: "시각(선택)", value: state.addTime || "" });
 
   const addSampleBtn = el("button", {
     class: "btn primary",
     text: "시료 추가",
     onclick: async () => {
       try {
-        const loc = state.mode === "scatter" ? safeText(locInput?.value) : "";
+        const loc = safeText(locInput.value);
         const dateISO = state.activeDate || new Date().toISOString().slice(0, 10);
 
         setFoot("시료를 생성 중입니다...");
@@ -1747,6 +1908,13 @@ function renderJobWork() {
 
         // reload to get correct p_index & date lists
         await loadJob(job);
+
+        // time optional
+        const t = safeText(timeInput.value);
+        if (t) {
+          await updateSampleFields(newRow.id || newRow?.[0]?.id, { start_time: t });
+          await loadJob(job);
+        }
 
         setFoot("시료가 추가되었습니다.");
       } catch (e) {
@@ -1768,21 +1936,44 @@ function renderJobWork() {
       ]),
     ]),
     tabs,
-    el("div", { class: "row", style: "margin-top:10px;" }, [
-      ...(state.mode === "scatter"
-        ? [
-            el("div", { class: "col", style: "flex:1; min-width:240px;" }, [
-              el("div", { class: "label", text: `시료 추가 · ${ymdDots(state.activeDate)}` }),
-              locInput,
-            ]),
-          ]
-        : []),
-      // 농도: 시료 추가 시 위치/시각 입력 제거(아래 등록된 시료에서 입력)
-      el("div", { class: "col", style: "justify-content:flex-end;" }, [addSampleBtn]),
-    ]),
+    el("div", { class: "row", style: "margin-top:10px;" }, (() => {
+      const cols = [];
+      cols.push(
+        el("div", { class: "col", style: "flex:1; min-width:240px;" }, [
+          el("div", { class: "label", text: state.mode === "scatter" ? ymdDots(state.activeDate) : `시료 추가 · ${ymdDots(state.activeDate)}` }),
+          locInput,
+        ])
+      );
+      if (state.mode !== "scatter") {
+        cols.push(
+          el("div", { class: "col" }, [
+            el("div", { class: "label", text: "시각(선택)" }),
+            timeInput,
+          ])
+        );
+      }
+      const btnColKids = [];
+      if (state.mode === "scatter") btnColKids.push(el("div", { class: "label", html: "&nbsp;" }));
+      btnColKids.push(addSampleBtn);
+      cols.push(el("div", { class: "col", style: "justify-content:flex-end;" }, btnColKids));
+      return cols;
+    })()),
   ]);
 
   root.appendChild(head);
+
+  // 날짜 등록(체크 버튼)
+  if (state.pendingDate && iso10(state.pendingDate) !== iso10(state.activeDate)) {
+    root.appendChild(
+      el("button", {
+        class: "dateApplyFab",
+        type: "button",
+        text: "✓",
+        onclick: applyPendingDate,
+        "aria-label": "날짜 등록",
+      })
+    );
+  }
 
   // samples list
   const dateISO = state.activeDate;
@@ -1794,81 +1985,82 @@ function renderJobWork() {
   }
 
   for (const s of samples) {
-    const isScatter = state.mode === "scatter";
 
-    // 농도: 타이틀에는 위치를 표시하지 않고(미입력 제거), 아래에서 입력
-    const titleText = isScatter
-      ? `P${s.p_index || "?"} · ${safeText(s.sample_location, "")}`
-      : `P${s.p_index || "?"}`;
+    let left;
+    if (state.mode === "density") {
+      const locInp = el("input", {
+        class: "input",
+        placeholder: "시료 위치",
+        value: safeText(s.sample_location),
+        onblur: async (ev) => {
+          const v = safeText(ev.target.value);
+          if (v === safeText(s.sample_location)) return;
+          try {
+            await updateSampleFields(s.id, { sample_location: v });
+            s.sample_location = v;
+          } catch (e) {
+            console.error(e);
+            alert(e?.message || String(e));
+          }
+        },
+      });
 
-    const titleEl = el("div", { class: "sampleTitle", text: titleText });
-
-    const saveSampleLocation = async (ev) => {
-      const v = safeText(ev.target.value);
-      if (v === safeText(s.sample_location)) return;
-      try {
-        await updateSampleFields(s.id, { sample_location: v });
-        s.sample_location = v;
-        if (isScatter) {
-          titleEl.textContent = `P${s.p_index || "?"} · ${safeText(v, "")}`;
+      const saveTime = async (ev) => {
+        const v = safeText(ev.target.value);
+        if (v === safeText(s.start_time)) return;
+        try {
+          await updateSampleFields(s.id, { start_time: v });
+          s.start_time = v;
+        } catch (e) {
+          console.error(e);
+          alert(e?.message || String(e));
         }
-        setFoot("시료 위치가 저장되었습니다.");
-      } catch (e) {
-        console.error(e);
-        setFoot(`저장 실패: ${e?.message || e}`);
-      }
-    };
+      };
+      const tInp = el("input", {
+        class: "timeInput",
+        type: "time",
+        value: safeText(s.start_time),
+        onchange: saveTime,
+        onblur: saveTime,
+      });
 
-    const saveStartTime = async (ev) => {
-      const v = safeText(ev.target.value);
-      if (v === safeText(s.start_time)) return;
-      try {
-        await updateSampleFields(s.id, { start_time: v });
-        s.start_time = v;
-        setFoot("측정시작시간이 저장되었습니다.");
-      } catch (e) {
-        console.error(e);
-        setFoot(`저장 실패: ${e?.message || e}`);
-      }
-    };
-
-    const left = el("div", { class: "sampleLeft" }, [
-      titleEl,
-      el("div", { class: "sampleMeta" }, [
-        el("div", { class: "metaLine" }, [
-          el("span", { class: "label", text: ymdDots(s.measurement_date) }),
+      left = el("div", { class: "sampleLeft" }, [
+        el("div", { class: "sampleTitle", text: `P${s.p_index || "?"}` }),
+        el("div", { class: "label", text: ymdDots(s.measurement_date) }),
+        locInp,
+        el("div", { class: "label", text: "측정시작시간" }),
+        tInp,
+      ]);
+    } else {
+      left = el("div", { class: "sampleLeft" }, [
+        el("div", { class: "sampleTitle", text: `P${s.p_index || "?"} · ${safeText(s.sample_location, "미입력")}` }),
+        el("div", { class: "sampleMeta" }, [
+          el("div", { class: "metaLine" }, [
+            el("span", { class: "label", text: ymdDots(s.measurement_date) }),
+          ]),
+          el("div", { class: "metaLine" }, [
+            el("span", { class: "label", text: "시각" }),
+            el("input", {
+              class: "timeInput",
+              value: safeText(s.start_time),
+              placeholder: "예: 10:30",
+              onblur: async (ev) => {
+                const v = safeText(ev.target.value);
+                if (v === safeText(s.start_time)) return;
+                try {
+                  await updateSampleFields(s.id, { start_time: v });
+                  s.start_time = v;
+                  setFoot("시각이 저장되었습니다.");
+                } catch (e) {
+                  console.error(e);
+                  setFoot(`저장 실패: ${e?.message || e}`);
+                }
+              },
+            }),
+          ]),
         ]),
-
-        // 농도: 위치 입력을 여기서
-        ...(!isScatter
-          ? [
-              el("div", { class: "metaLine" }, [
-                el("input", {
-                  class: "input",
-                  style: "width:100%; padding:8px 10px; font-size:13px;",
-                  value: safeText(s.sample_location),
-                  placeholder: "시료 위치",
-                  onchange: saveSampleLocation,
-                  onblur: saveSampleLocation,
-                }),
-              ]),
-            ]
-          : []),
-
-        // 측정시작시간
-        el("div", { class: "metaLine", style: "gap:8px;" }, [
-          el("span", { class: "label", text: "측정시작시간" }),
-          el("input", {
-            class: "timeInput",
-            type: "time",
-            step: "60",
-            value: safeText(s.start_time) || "",
-            onchange: saveStartTime,
-            onblur: saveStartTime,
-          }),
-        ]),
-      ]),
-    ]);
+      ]);
+    }
 
     const right = el("div", { class: `sampleRight ${state.mode}` });
 
@@ -1906,7 +2098,7 @@ function renderJobWork() {
     }
 
     const row = el("div", { class: "sampleRow" }, [left, right]);
-    root.appendChild(makeSwipeItem(row, () => deleteSample(s)));
+    root.appendChild(createSwipeRow(row, () => deleteSample(s)));
   }
 }
 
@@ -1918,6 +2110,7 @@ function renderJobWork() {
   try { window.__APP_BOOTED = false; } catch {}
   try {
     setFoot("초기화 중...");
+    await initSupabase();
     await loadSession();
     if (state.user) {
       await loadCompanies();
@@ -1929,6 +2122,16 @@ function renderJobWork() {
     // auth state change
     supabase.auth.onAuthStateChange(async (_event, session) => {
       state.user = session?.user || null;
+      if (session?.access_token && session?.refresh_token) {
+        try {
+          await supabase.auth.setSession({
+            access_token: session.access_token,
+            refresh_token: session.refresh_token,
+          });
+        } catch (e) {
+          console.warn('setSession sync failed:', e);
+        }
+      }
       if (state.user) {
         await loadCompanies().catch(() => null);
       } else {
