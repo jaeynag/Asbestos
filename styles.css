@@ -112,36 +112,27 @@ body{
 /* ===== Page layout ===== */
 .root{ padding:0 16px 16px; flex:1; }
 .footer{
-  display:none;
+  display:block;
+  height:0;
 }
 .footStatus{
+  display:block;
   position:fixed;
-  left:16px;
-  right:16px;
-  top:64px;
+  top:calc(56px + env(safe-area-inset-top));
+  left:50%;
+  transform:translateX(-50%);
+  width:min(820px, calc(100vw - 32px));
   padding:10px 12px;
+  background:#fff;
+  border:1px solid var(--line);
   border-radius:12px;
-  background:rgba(17,17,17,0.92);
-  color:#fff;
+  box-shadow:0 10px 30px rgba(0,0,0,0.08);
   font-size:13px;
-  z-index:80;
-  opacity:0;
-  transform:translateY(-6px);
-  pointer-events:none;
-  transition:opacity .18s ease, transform .18s ease;
-}
-.footStatus.show{ opacity:1; transform:translateY(0); }
-
-/* time input placeholder overlay */
-.timeWrap{ position:relative; width:100%; }
-.timeWrap .timeInput{ width:100%; }
-.timePlaceholder{
-  position:absolute;
-  left:12px;
-  top:50%;
-  transform:translateY(-50%);
   color:var(--muted);
+  opacity:0;
+  transition:opacity .18s ease;
   pointer-events:none;
+  z-index:60;
 }
 
 .card{
@@ -498,8 +489,6 @@ select{
   justify-content:flex-end;
   align-items:stretch;
   z-index:0;
-  background:#fff;
-  padding-right:1px;
 }
 .swipeDeleteBtn{
   width:92px;
@@ -518,7 +507,6 @@ select{
   background:#fff;
   border-radius:12px;
   overflow:hidden;
-  width:100%;
 }
 .swipeRow.dragging .swipeContent{ transition:none !important; }
 
