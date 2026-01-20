@@ -114,7 +114,35 @@ body{
 .footer{
   display:none;
 }
-.footStatus{ display:none; }
+.footStatus{
+  position:fixed;
+  left:16px;
+  right:16px;
+  top:64px;
+  padding:10px 12px;
+  border-radius:12px;
+  background:rgba(17,17,17,0.92);
+  color:#fff;
+  font-size:13px;
+  z-index:80;
+  opacity:0;
+  transform:translateY(-6px);
+  pointer-events:none;
+  transition:opacity .18s ease, transform .18s ease;
+}
+.footStatus.show{ opacity:1; transform:translateY(0); }
+
+/* time input placeholder overlay */
+.timeWrap{ position:relative; width:100%; }
+.timeWrap .timeInput{ width:100%; }
+.timePlaceholder{
+  position:absolute;
+  left:12px;
+  top:50%;
+  transform:translateY(-50%);
+  color:var(--muted);
+  pointer-events:none;
+}
 
 .card{
   background:var(--card);
@@ -470,6 +498,8 @@ select{
   justify-content:flex-end;
   align-items:stretch;
   z-index:0;
+  background:#fff;
+  padding-right:1px;
 }
 .swipeDeleteBtn{
   width:92px;
@@ -488,6 +518,7 @@ select{
   background:#fff;
   border-radius:12px;
   overflow:hidden;
+  width:100%;
 }
 .swipeRow.dragging .swipeContent{ transition:none !important; }
 
