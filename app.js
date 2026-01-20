@@ -49,6 +49,16 @@ async function loadSupabaseModule() {
 const SUPABASE_URL = "https://jvzcynpajbjdbtzbysxm.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_h7DfY9lO57IP_N3-Yz_hmg_mep3kopP";
 
+function _supabaseProjectRef() {
+  try {
+    const m = String(SUPABASE_URL || '').match(/^https?:\/\/([a-z0-9-]+)\./i);
+    return m ? m[1] : '';
+  } catch {
+    return '';
+  }
+}
+
+
 // Supabase Storage bucket (fallback / thumbnail signed url)
 const BUCKET = "job_photos";
 const SIGNED_URL_TTL_SEC = 60 * 30; // 30분
@@ -190,9 +200,23 @@ function formatFastApiDetail(detail) {
   return String(detail || "");
 }
 
-function setFoot(_msg) {
-  // 하단 알림문구 제거(요청사항)
-  return;
+function setFoot(msg) {
+  // 알림은 스크롤을 만들지 않게 상단 토스트로 표시
+  try {
+    const el = document.getElementById('footStatus');
+    if (!el) return;
+    el.textContent = String(msg || '');
+    el.style.opacity = msg ? '1' : '0';
+    // 연속 호출 시 타이머 갱신
+    clearTimeout(el.__hideTimer);
+    if (msg) {
+      el.__hideTimer = setTimeout(() => {
+        try { el.style.opacity = '0'; } catch {}
+      }, 2500);
+    }
+  } catch {
+    // ignore
+  }
 }
 
 function normEmail(v) {
@@ -571,7 +595,6 @@ btnBack?.addEventListener("click", goBack);
 btnGear?.addEventListener("click", toggleSettings);
 
 menuChangeMode?.addEventListener("click", () => {
-  if (!state.user) return;
   closeSettings();
   if (!state.mode) return;
   if (!confirm("업무를 변경하시겠습니까?")) return;
@@ -583,7 +606,6 @@ menuChangeMode?.addEventListener("click", () => {
 });
 
 menuChangeCompany?.addEventListener("click", () => {
-  if (!state.user) return;
   closeSettings();
   if (!state.company) return;
   if (!confirm("회사를 변경하시겠습니까?")) return;
@@ -596,7 +618,6 @@ menuChangeCompany?.addEventListener("click", () => {
 });
 
 menuSignOut?.addEventListener("click", async () => {
-  if (!state.user) return;
   closeSettings();
   cleanupAllThumbBlobs();
 
@@ -604,12 +625,39 @@ menuSignOut?.addEventListener("click", async () => {
   // 실패하더라도 로컬 토큰/상태를 정리해서 반드시 로그아웃 상태로 만든다.
   try {
     await initSupabase();
-    await supabase.auth.signOut();
+
+    // 가능한 경우 local -> global 순으로 시도(환경별 옵션 지원 차이를 try/catch로 흡수)
+    try {
+      await supabase.auth.signOut({ scope: 'local' });
+    } catch {
+      await supabase.auth.signOut();
+    }
+
+    try {
+      const { data } = await supabase.auth.getSession();
+      if (data?.session) {
+        await supabase.auth.signOut({ scope: 'global' }).catch(() => null);
+      }
+    } catch {}
   } catch (e) {
     console.warn('signOut failed, force clearing:', e);
   }
 
-  // force clear auth tokens
+  // safeStorage()가 memStore로 동작하는 환경도 있으니, 대표 키는 직접 제거
+  try {
+    const ref = _supabaseProjectRef();
+    if (ref) {
+      const k = `sb-${ref}-auth-token`;
+      try { safeStorage().removeItem(k); } catch {}
+      try { localStorage.removeItem(k); } catch {}
+      try { sessionStorage.removeItem(k); } catch {}
+    }
+    try { safeStorage().removeItem('supabase.auth.token'); } catch {}
+    try { localStorage.removeItem('supabase.auth.token'); } catch {}
+    try { sessionStorage.removeItem('supabase.auth.token'); } catch {}
+  } catch {}
+
+  // force clear auth tokens (local/session storage)
   try {
     const keys = [];
     for (let i = 0; i < localStorage.length; i++) {
@@ -1484,7 +1532,7 @@ async function loadCompanies() {
   try {
     setFoot("회사 목록을 불러오는 중입니다...");
     await initSupabase();
-    if (!state.user) await loadSession();
+    await loadSession();
     state.companies = await fetchCompanies();
     setFoot("준비되었습니다.");
   } catch (e) {
@@ -1499,8 +1547,21 @@ async function loadJobs() {
   try {
     setFoot("현장 목록을 불러오는 중입니다...");
     await initSupabase();
-    if (!state.user) await loadSession();
+    await loadSession();
     state.jobs = await fetchJobs(state.company.id, state.mode);
+    // 구버전/타 시스템 호환: jobs.mode가 'C'/'S'로 저장된 경우가 있어,
+    // 새 모드값(density/scatter)로 0건이면 한 번만 재시도한다.
+    if (!state.jobs.length) {
+      const legacy = state.mode === 'density' ? 'C' : (state.mode === 'scatter' ? 'S' : null);
+      if (legacy) {
+        try {
+          const again = await fetchJobs(state.company.id, legacy);
+          if (again && again.length) state.jobs = again;
+        } catch (e) {
+          // ignore legacy fallback errors
+        }
+      }
+    }
     setFoot("준비되었습니다.");
   } catch (e) {
     console.error(e);
@@ -1676,9 +1737,24 @@ function renderAuth() {
         }
 
         // login
-        const { error } = await supabase.auth.signInWithPassword({ email: e, password: p });
+        const { data, error } = await supabase.auth.signInWithPassword({ email: e, password: p });
         if (error) throw error;
-        await loadSession();
+
+        // 일부 환경에서 signIn 직후 getSession이 늦게 갱신되어 새로고침이 필요한 것처럼 보일 수 있어
+        // 반환된 session을 우선 적용해 즉시 UI/권한을 맞춘다.
+        if (data?.session?.access_token && data?.session?.refresh_token) {
+          try {
+            await supabase.auth.setSession({
+              access_token: data.session.access_token,
+              refresh_token: data.session.refresh_token,
+            });
+          } catch (e) {
+            console.warn('setSession after signIn failed:', e);
+          }
+          state.user = data.session.user || null;
+        } else {
+          await loadSession();
+        }
         await loadCompanies();
         render();
       } catch (err) {
