@@ -8,7 +8,7 @@
   <meta http-equiv="Expires" content="0" />
   <meta name="color-scheme" content="light" />
   <title>Asbestos field photos</title>
-  <link rel="stylesheet" href="./styles.css?v=20260120-02" />
+  <link rel="stylesheet" href="./styles.css?v=20260120-03" />
   <link rel="icon" href="./favicon.ico" />
   <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
   <link rel="manifest" href="./manifest.json" />
@@ -126,6 +126,8 @@
     };
   </script>
 
-  <script type="module" src="./app.js?v=20260120-02"></script>
+  <!-- Supabase UMD (공식 CDN). app.js가 ESM import 없이 window.supabase를 사용하도록 전환 -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script type="module" src="./app.js?v=20260120-03"></script>
 </body>
 </html>
