@@ -22,10 +22,7 @@
 // supabase-js는 동적 import로 로드합니다(로컬 파일 우선, 실패 시 CDN).
 async function loadSupabaseModule() {
   const candidates = [
-    // 로컬로 번들해두면 PWA 안정성이 확 올라감(추천)
-    "./vendor/supabase-js@2.esm.js",
-    "./vendor/supabase-js@2/+esm.js",
-    // 최후 fallback
+    // CDN only (로컬 vendor 경로가 없으면 404 스팸이 나서 제외)
     "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm",
   ];
   let lastErr = null;
@@ -190,25 +187,6 @@ function formatFastApiDetail(detail) {
 function setFoot(msg) {
   const el = document.getElementById("footStatus");
   if (el) el.textContent = msg;
-}
-
-async function syncSessionTokens(session) {
-  // iOS 홈화면(PWA)/일부 WebView에서 로그인 직후 RLS 조회가 비는 케이스 방어
-  try {
-    const access = session?.access_token;
-    const refresh = session?.refresh_token;
-    if (!access) return;
-
-    // 일부 환경에서 refresh_token 이 비어있거나 늦게 채워지는 케이스가 있어,
-    // 가능하면 setSession, 아니면 setAuth(있을 때)로 access 토큰만이라도 동기화한다.
-    if (refresh && typeof supabase?.auth?.setSession === 'function') {
-      await supabase.auth.setSession({ access_token: access, refresh_token: refresh });
-    } else if (typeof supabase?.auth?.setAuth === 'function') {
-      supabase.auth.setAuth(access);
-    }
-  } catch (e) {
-    console.warn("setSession sync failed:", e);
-  }
 }
 
 function normEmail(v) {
@@ -451,6 +429,7 @@ const state = {
 
   dates: [],
   activeDate: null,
+
   dateDraft: null,
   samplesByDate: new Map(),
 
@@ -1426,17 +1405,11 @@ async function deleteJobAndRelated(job) {
 /** =========================
  *  Loaders
  *  ========================= */
-async function loadSession(sessionOverride) {
-  // 일부 환경(iOS 홈화면/PC WebView)에서 getSession 직후 토큰/세션 반영이 늦어서
-  // 로그인 직후 RLS 조회가 비는 케이스가 있음.
-  // 가능하면 signIn/signUp이 돌려준 session을 우선 사용하고, 없으면 getSession으로 가져온다.
-  const sess = sessionOverride
-    ? sessionOverride
-    : ((await supabase.auth.getSession())?.data?.session || null);
+async function loadSession() {
+  // 로그인 세션 로드 (토큰 강제 동기화/재시도 로직은 여기서 하지 않음)
+  const { data } = await supabase.auth.getSession();
+  const sess = data?.session || null;
   state.user = sess?.user || null;
-
-  await syncSessionTokens(sess);
-
   if (state.user) {
     setFoot('로그인되었습니다.');
   }
@@ -1451,57 +1424,7 @@ async function loadCompanies() {
 async function loadJobs() {
   if (!state.company || !state.mode) return;
   setFoot("현장 목록을 불러오는 중입니다...");
-  try {
-    state.jobs = await fetchJobs(state.company.id, state.mode);
-
-    // 로그인 직후 토큰 반영이 늦으면(특히 PWA/WebView) RLS 때문에 200 + 빈 배열로 떨어질 수 있음.
-    // 에러가 안 나와서 catch가 안 타는 케이스라, '빈 목록'일 때 1회만 동기화 후 재조회한다.
-    if (state.user && Array.isArray(state.jobs) && state.jobs.length === 0) {
-      try {
-        const sess = (await supabase.auth.getSession())?.data?.session || null;
-        if (sess?.access_token) {
-          await syncSessionTokens(sess);
-          await new Promise((r) => setTimeout(r, 160));
-          const again = await fetchJobs(state.company.id, state.mode);
-          if (Array.isArray(again) && again.length) state.jobs = again;
-        }
-      } catch {
-        // best-effort only
-      }
-    }
-  } catch (e) {
-    // 로그인 직후(특히 iOS 홈화면/PWA/WebView) 토큰 반영 타이밍 때문에
-    // RLS가 잠깐 막히는 케이스가 있어 1회만 재시도한다.
-    const msg = String(e?.message || e || '').toLowerCase();
-    const status = e?.status;
-    const maybeAuthTiming = status === 401 || status === 403
-      || msg.includes('jwt')
-      || msg.includes('not authorized')
-      || msg.includes('unauthorized')
-      || msg.includes('row level security')
-      || msg.includes('permission');
-
-    if (maybeAuthTiming) {
-      try {
-        await new Promise((r) => setTimeout(r, 180));
-        const sess = (await supabase.auth.getSession())?.data?.session || null;
-        await syncSessionTokens(sess);
-        state.jobs = await fetchJobs(state.company.id, state.mode);
-      } catch (e2) {
-        console.error(e2);
-        const m2 = e2?.message || String(e2);
-        setFoot(m2);
-        alert(m2);
-        return;
-      }
-    } else {
-      console.error(e);
-      const m = e?.message || String(e);
-      setFoot(m);
-      alert(m);
-      return;
-    }
-  }
+  state.jobs = await fetchJobs(state.company.id, state.mode);
   setFoot("준비되었습니다.");
 }
 
@@ -1523,7 +1446,6 @@ async function loadJob(job) {
   const dates = Array.from(new Set(samples.map((s) => s.measurement_date))).sort();
   state.dates = dates;
   state.activeDate = dates[0] || new Date().toISOString().slice(0, 10);
-  state.dateDraft = iso10(state.activeDate);
 
   for (const d of dates) state.samplesByDate.set(d, []);
   for (const s of samples) {
@@ -1544,10 +1466,6 @@ async function loadJob(job) {
 
     // 농도는 UI에서 사진 1장만 쓰므로, 과거 데이터의 role=single 은 measurement 로 정규화한다.
     const rawRole = p.role;
-
-    // 비산은 start/end만 사용: 과거 데이터의 single은 UI에서 제외
-    if (state.mode === "scatter" && rawRole === "single") continue;
-
     const role = (state.mode === "density" && rawRole === "single") ? "measurement" : rawRole;
 
     // 이미 measurement 가 있으면 single 은 무시(중복 슬롯 방지)
@@ -1563,8 +1481,6 @@ async function loadJob(job) {
     state.dates.unshift(state.activeDate);
     state.samplesByDate.set(state.activeDate, []);
   }
-
-  if (!state.dateDraft) state.dateDraft = iso10(state.activeDate);
 
   setFoot("불러오기가 완료되었습니다.");
   render();
@@ -1662,7 +1578,7 @@ function renderAuth() {
           if (error) throw error;
 
           if (data?.session) {
-            await loadSession(data.session);
+            await loadSession();
             await loadCompanies();
             render();
             return;
@@ -1675,9 +1591,9 @@ function renderAuth() {
         }
 
         // login
-        const { data: signInData, error } = await supabase.auth.signInWithPassword({ email: e, password: p });
+        const { error } = await supabase.auth.signInWithPassword({ email: e, password: p });
         if (error) throw error;
-        await loadSession(signInData?.session || null);
+        await loadSession();
         await loadCompanies();
         render();
       } catch (err) {
@@ -1866,77 +1782,81 @@ function renderJobSelect() {
 function renderJobWork() {
   const job = state.job;
 
-  if (!state.dateDraft) state.dateDraft = iso10(state.activeDate);
-
   // date tabs
   const tabs = el("div", { class: "tabs", style: "margin:10px 0;" });
-  for (const d of state.dates) {
-    const del = el("span", {
-      class: "tabX",
-      text: "×",
-      onclick: (ev) => {
-        ev.stopPropagation();
-        ev.preventDefault();
 
-        const bucket = state.samplesByDate.get(d) || [];
-        if (bucket.length) {
-          alert("이 날짜에 시료가 있어 삭제할 수 없습니다.\n(먼저 시료를 삭제해 주세요.)");
-          return;
-        }
-        if (!confirm(`${ymdDots(d)} 날짜를 삭제할까요?`)) return;
-
-        state.samplesByDate.delete(d);
-        state.dates = state.dates.filter((x) => x !== d);
-        if (state.activeDate === d) {
-          state.activeDate = state.dates[0] || new Date().toISOString().slice(0, 10);
-          if (!state.samplesByDate.has(state.activeDate)) state.samplesByDate.set(state.activeDate, []);
-        }
-        state.dateDraft = iso10(state.activeDate);
-        render();
-      },
-    });
-    tabs.appendChild(
-      el("button", {
-        class: "tab" + (state.activeDate === d ? " active" : ""),
-        type: "button",
-        onclick: () => {
-          state.activeDate = d;
-          state.dateDraft = iso10(d);
-          state.addOpen = false;
-          render();
-        },
-      }, [
-        el("span", { class: "tabText", text: ymdDots(d) }),
-        del,
-      ])
-    );
+  function deleteEmptyDate(dateISO) {
+    const bucket = state.samplesByDate.get(dateISO) || [];
+    if (bucket.length) {
+      alert("이 날짜에는 시료가 있어서 삭제할 수 없습니다. (시료를 먼저 삭제해줘)");
+      return;
+    }
+    state.samplesByDate.delete(dateISO);
+    state.dates = state.dates.filter((x) => x !== dateISO);
+    if (state.activeDate === dateISO) {
+      state.activeDate = state.dates[0] || new Date().toISOString().slice(0, 10);
+    }
+    // draft도 따라가게
+    state.dateDraft = iso10(state.activeDate);
+    render();
   }
 
-  const dateAdd = el("input", {
+  for (const d of state.dates) {
+    const tab = el(
+      "button",
+      {
+        class: "tab" + (state.activeDate === d ? " active" : ""),
+        onclick: () => {
+          state.activeDate = d;
+          state.addOpen = false;
+          state.dateDraft = iso10(d);
+          render();
+        },
+      },
+      [
+        el("span", { text: ymdDots(d) }),
+        el("span", {
+          class: "tabX",
+          text: "×",
+          onclick: (ev) => {
+            ev.stopPropagation();
+            deleteEmptyDate(d);
+          },
+        }),
+      ]
+    );
+    tabs.appendChild(tab);
+  }
+
+  // date picker (draft) + apply check
+  if (!state.dateDraft) state.dateDraft = iso10(state.activeDate);
+
+  const datePick = el("input", {
     class: "input",
     type: "date",
     value: iso10(state.dateDraft || state.activeDate),
-    onchange: () => {
-      state.dateDraft = iso10(dateAdd.value);
+    onchange: (ev) => {
+      state.dateDraft = iso10(ev.target.value);
     },
   });
 
   const applyDateBtn = el("button", {
-    class: "btn primary small dateApplyBtn",
+    class: "iconBtn",
     type: "button",
-    text: "✓",
+    ariaLabel: "날짜 적용",
     onclick: () => {
-      const v = iso10(state.dateDraft || dateAdd.value);
+      const v = iso10(state.dateDraft || datePick.value || state.activeDate);
       if (!state.dates.includes(v)) {
         state.dates.push(v);
         state.dates.sort();
         state.samplesByDate.set(v, []);
       }
       state.activeDate = v;
-      state.dateDraft = v;
       render();
     },
-  });
+  }, [
+    el("span", { text: "✓" }),
+  ]);
 
   // add sample
   const SCATTER_LOCATIONS = [
@@ -1964,44 +1884,19 @@ function renderJobWork() {
     locInput = sel;
   }
 
-  let addTimeInput = null;
-  if (state.mode === "scatter") {
-    addTimeInput = el("input", {
-      class: "timeInput",
-      type: "time",
-      step: "60",
-      value: safeText(state.addTime),
-      onchange: (ev) => {
-        state.addTime = ev.target.value || "";
-      },
-    });
-  }
-
   const addSampleBtn = el("button", {
     class: "btn primary",
     text: "시료 추가",
     onclick: async () => {
       try {
-        const loc = safeText(locInput ? locInput.value : "");
         const dateISO = state.activeDate || new Date().toISOString().slice(0, 10);
+        const loc = state.mode === "scatter" ? safeText(locInput?.value) : ""; // 농도는 등록칸에서 위치 입력 안 함
 
         setFoot("시료를 생성 중입니다...");
-        const newRow = await createSample(job.id, dateISO, loc);
+        await createSample(job.id, dateISO, loc);
 
         // reload to get correct p_index & date lists
         await loadJob(job);
-
-        // 비산: 시각(선택)
-        if (state.mode === "scatter") {
-          const t = safeText(state.addTime);
-          const newId = newRow?.id || (Array.isArray(newRow) ? newRow?.[0]?.id : null);
-          if (t && newId) {
-            await updateSampleFields(newId, { start_time: t });
-            state.addTime = "";
-            await loadJob(job);
-          }
-        }
-
         setFoot("시료가 추가되었습니다.");
       } catch (e) {
         console.error(e);
@@ -2011,29 +1906,43 @@ function renderJobWork() {
     },
   });
 
+  const headRight = el("div", { class: "row", style: "gap:8px; align-items:flex-end;" }, [
+    el("div", { class: "col", style: "min-width:180px;" }, [
+      el("div", { class: "label", text: "날짜" }),
+      datePick,
+    ]),
+    el("div", { class: "col", style: "justify-content:flex-end;" }, [applyDateBtn]),
+  ]);
+
+  const addRowChildren = [];
+  if (state.mode === "scatter") {
+    addRowChildren.push(
+      el("div", { class: "col", style: "flex:1; min-width:240px;" }, [
+        el("div", { class: "label", text: `시료 추가 · ${ymdDots(state.activeDate)}` }),
+        locInput,
+      ])
+    );
+  } else {
+    // 농도: 등록칸에서 위치/시각 입력 완전 삭제
+    addRowChildren.push(
+      el("div", { class: "col", style: "flex:1; min-width:240px;" }, [
+        el("div", { class: "label", text: `시료 추가 · ${ymdDots(state.activeDate)}` }),
+        el("div", { class: "label", text: "(시료 위치는 아래 목록에서 입력)" }),
+      ])
+    );
+  }
+  addRowChildren.push(el("div", { class: "col", style: "justify-content:flex-end;" }, [addSampleBtn]));
+
   const head = el("div", { class: "card" }, [
     el("div", { class: "row space" }, [
       el("div", { class: "col" }, [
         el("div", { class: "item-title", text: safeText(job.project_name, "(현장)") }),
         el("div", { class: "item-sub", text: [modeLabel(state.mode), safeText(job.address)].filter(Boolean).join(" · ") }),
       ]),
-      el("div", { class: "row", style: "gap:8px;" }, [
-        dateAdd,
-        applyDateBtn,
-      ]),
+      headRight,
     ]),
     tabs,
-    el("div", { class: "row", style: "margin-top:10px;" }, [
-      el("div", { class: "col", style: "flex:1; min-width:240px;" }, [
-        el("div", { class: "label", text: `시료 추가 · ${ymdDots(state.activeDate)}` }),
-        ...(locInput ? [locInput] : []),
-      ]),
-      ...(addTimeInput ? [el("div", { class: "col" }, [
-        el("div", { class: "label", text: "시각(선택)" }),
-        addTimeInput,
-      ])] : []),
-      el("div", { class: "col", style: "justify-content:flex-end;" }, [addSampleBtn]),
-    ]),
+    el("div", { class: "row", style: "margin-top:10px;" }, addRowChildren),
   ]);
 
   root.appendChild(head);
@@ -2048,10 +1957,10 @@ function renderJobWork() {
   }
 
   for (const s of samples) {
-
-    let titleEl;
+    // left side
+    let titleNode;
     if (state.mode === "density") {
-      const locEdit = el("input", {
+      const inp = el("input", {
         class: "sampleLocEdit",
         value: safeText(s.sample_location),
         placeholder: "미입력",
@@ -2068,23 +1977,49 @@ function renderJobWork() {
           }
         },
       });
-      titleEl = el("div", { class: "sampleTitle" }, [
+      titleNode = el("div", { class: "sampleTitle" }, [
         el("span", { class: "sampleTitlePrefix", text: `P${s.p_index || "?"} · ` }),
-        locEdit,
+        inp,
       ]);
     } else {
-      titleEl = el("div", { class: "sampleTitle", text: `P${s.p_index || "?"} · ${safeText(s.sample_location, "미입력")}` });
+      titleNode = el("div", { class: "sampleTitle", text: `P${s.p_index || "?"} · ${safeText(s.sample_location, "미입력")}` });
     }
 
-    const metaChildren = [
+    const metaLines = [
       el("div", { class: "metaLine" }, [
         el("span", { class: "label", text: ymdDots(s.measurement_date) }),
       ]),
     ];
 
+    // scatter only: time dial input (not in add row)
+    if (state.mode === "scatter") {
+      metaLines.push(
+        el("div", { class: "metaLine" }, [
+          el("span", { class: "label", text: "시각" }),
+          el("input", {
+            class: "timeInput",
+            type: "time",
+            value: safeText(s.start_time),
+            onblur: async (ev) => {
+              const v = safeText(ev.target.value);
+              if (v === safeText(s.start_time)) return;
+              try {
+                await updateSampleFields(s.id, { start_time: v });
+                s.start_time = v;
+                setFoot("시각이 저장되었습니다.");
+              } catch (e) {
+                console.error(e);
+                setFoot(`저장 실패: ${e?.message || e}`);
+              }
+            },
+          }),
+        ])
+      );
+    }
+
     const left = el("div", { class: "sampleLeft" }, [
-      titleEl,
-      el("div", { class: "sampleMeta" }, metaChildren),
+      titleNode,
+      el("div", { class: "sampleMeta" }, metaLines),
     ]);
 
     const right = el("div", { class: `sampleRight ${state.mode}` });
@@ -2122,10 +2057,11 @@ function renderJobWork() {
       );
     }
 
-    const row = el("div", { class: "sampleRow" }, [left, right]);
+    const row = el("div", { class: `sampleRow mode-${state.mode}` }, [left, right]);
     root.appendChild(createSwipeRow(row, () => deleteSample(s)));
   }
 }
+
 
 /** =========================
  *  Bootstrap
@@ -2146,7 +2082,6 @@ function renderJobWork() {
 
     // auth state change
     supabase.auth.onAuthStateChange(async (_event, session) => {
-      await syncSessionTokens(session).catch(() => null);
       state.user = session?.user || null;
       if (state.user) {
         await loadCompanies().catch(() => null);
