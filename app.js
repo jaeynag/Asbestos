@@ -1,3 +1,5 @@
+/*__OUTER_IIFE__*/
+;(function(){
 // app.js (GitHub Pages web uploader)
 // - UI: index.html + styles.css classes are kept
 // - Data: Supabase (Auth + PostgREST)
@@ -1815,4 +1817,6 @@ function renderJobWork() {
     render();
     try { window.__APP_BOOTED = false; } catch {}
   }
+})();
+
 })();
