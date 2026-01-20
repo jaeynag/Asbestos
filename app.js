@@ -195,11 +195,16 @@ function setFoot(msg) {
 async function syncSessionTokens(session) {
   // iOS 홈화면(PWA)/일부 WebView에서 로그인 직후 RLS 조회가 비는 케이스 방어
   try {
-    if (session?.access_token && session?.refresh_token) {
-      await supabase.auth.setSession({
-        access_token: session.access_token,
-        refresh_token: session.refresh_token,
-      });
+    const access = session?.access_token;
+    const refresh = session?.refresh_token;
+    if (!access) return;
+
+    // 일부 환경에서 refresh_token 이 비어있거나 늦게 채워지는 케이스가 있어,
+    // 가능하면 setSession, 아니면 setAuth(있을 때)로 access 토큰만이라도 동기화한다.
+    if (refresh && typeof supabase?.auth?.setSession === 'function') {
+      await supabase.auth.setSession({ access_token: access, refresh_token: refresh });
+    } else if (typeof supabase?.auth?.setAuth === 'function') {
+      supabase.auth.setAuth(access);
     }
   } catch (e) {
     console.warn("setSession sync failed:", e);
@@ -1420,11 +1425,13 @@ async function deleteJobAndRelated(job) {
 /** =========================
  *  Loaders
  *  ========================= */
-async function loadSession() {
-  // 일부 환경(iOS 홈화면/PC WebView)에서 getSession으로는 user가 보이는데,
-  // 내부 클라이언트에 access token 이 붙지 않아 RLS가 전부 비는 케이스가 있어 setSession으로 강제 동기화한다.
-  const { data } = await supabase.auth.getSession();
-  const sess = data?.session || null;
+async function loadSession(sessionOverride) {
+  // 일부 환경(iOS 홈화면/PC WebView)에서 getSession 직후 토큰/세션 반영이 늦어서
+  // 로그인 직후 RLS 조회가 비는 케이스가 있음.
+  // 가능하면 signIn/signUp이 돌려준 session을 우선 사용하고, 없으면 getSession으로 가져온다.
+  const sess = sessionOverride
+    ? sessionOverride
+    : ((await supabase.auth.getSession())?.data?.session || null);
   state.user = sess?.user || null;
 
   await syncSessionTokens(sess);
@@ -1597,7 +1604,7 @@ function renderAuth() {
           if (error) throw error;
 
           if (data?.session) {
-            await loadSession();
+            await loadSession(data.session);
             await loadCompanies();
             render();
             return;
@@ -1610,9 +1617,9 @@ function renderAuth() {
         }
 
         // login
-        const { error } = await supabase.auth.signInWithPassword({ email: e, password: p });
+        const { data: signInData, error } = await supabase.auth.signInWithPassword({ email: e, password: p });
         if (error) throw error;
-        await loadSession();
+        await loadSession(signInData?.session || null);
         await loadCompanies();
         render();
       } catch (err) {
