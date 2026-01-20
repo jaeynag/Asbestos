@@ -18,27 +18,7 @@
 //   - Supabase Storage: "companyId/mode/jobId/.../role.jpg" (상대경로)
 //   - NAS:             "https://.../files/.../role.jpg" (URL)
 
-// NOTE: iOS 홈화면(PWA)/일부 WebView에서 외부 ESM CDN 로드가 간헐적으로 실패하는 케이스가 있어
-// supabase-js는 동적 import로 로드합니다(로컬 파일 우선, 실패 시 CDN).
-async function loadSupabaseModule() {
-  const candidates = [
-    // 로컬로 번들해두면 PWA 안정성이 확 올라감(추천)
-    "./vendor/supabase-js@2.esm.js",
-    "./vendor/supabase-js@2/+esm.js",
-    // 최후 fallback
-    "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm",
-  ];
-  let lastErr = null;
-  for (const url of candidates) {
-    try {
-      return await import(url);
-    } catch (e) {
-      lastErr = e;
-    }
-  }
-  throw lastErr || new Error("supabase-js 모듈을 로드하지 못했습니다.");
-}
-
+import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 
 /** =========================
  *  Config
@@ -71,9 +51,7 @@ function _trim(v) {
   return String(v ?? "").trim();
 }
 function _normBase(v) {
-  const s = _trim(v);
-  if (!s || s === 'null') return '';
-  return s.replace(/\/$/, '');
+  return _trim(v).replace(/\/$/, "");
 }
 function _isGithubIoHost() {
   try {
@@ -81,19 +59,6 @@ function _isGithubIoHost() {
   } catch {
     return false;
   }
-}
-function _safeOrigin() {
-  try {
-    if (typeof location !== 'undefined') {
-      if (location.protocol === 'file:') return '';
-      const o = _trim(location.origin);
-      if (!o || o === 'null') return '';
-      return o;
-    }
-  } catch {
-    // ignore
-  }
-  return '';
 }
 
 // iOS PWA/일부 WebView에서 localStorage 접근이 SecurityError로 터지는 케이스 방어
@@ -118,7 +83,7 @@ const CFG_FILE_BASE = _trim(APP_CONFIG.NAS_FILE_BASE);
 const CFG_DELETE = _trim(APP_CONFIG.NAS_DELETE_URL);
 const CFG_AUTH = _trim(APP_CONFIG.NAS_AUTH_TOKEN);
 
-const AUTO_GATEWAY = _isGithubIoHost() ? '' : _safeOrigin();
+const AUTO_GATEWAY = _isGithubIoHost() ? "" : _trim(location.origin);
 
 const NAS_GATEWAY_URL = _normBase(LS_GATEWAY || CFG_GATEWAY || AUTO_GATEWAY);
 const NAS_UPLOAD_URL = _trim(LS_UPLOAD || CFG_UPLOAD || (NAS_GATEWAY_URL ? `${NAS_GATEWAY_URL}/upload` : ""));
@@ -134,8 +99,7 @@ async function getNasAuthorization() {
     return `Bearer ${raw}`;
   }
   try {
-    const sb = await initSupabase();
-    const { data } = await sb.auth.getSession();
+    const { data } = await supabase.auth.getSession();
     const token = data?.session?.access_token;
     if (token) return `Bearer ${token}`;
   } catch {
@@ -216,127 +180,6 @@ function el(tag, attrs = {}, children = []) {
   return n;
 }
 
-/** =========================
- *  Swipe to delete (jobs/samples)
- *  ========================= */
-const SWIPE_ACTION_WIDTH = 92;
-let __openSwipeRow = null;
-
-function closeSwipeRow(row) {
-  if (!row) return;
-  const content = row.__swipeContent;
-  if (!content) return;
-  row.__swipeOpen = false;
-  content.style.transition = 'transform 0.18s ease';
-  content.style.transform = 'translateX(0px)';
-  if (__openSwipeRow === row) __openSwipeRow = null;
-}
-
-function openSwipeRow(row) {
-  if (!row) return;
-  const content = row.__swipeContent;
-  if (!content) return;
-  if (__openSwipeRow && __openSwipeRow !== row) closeSwipeRow(__openSwipeRow);
-  row.__swipeOpen = true;
-  __openSwipeRow = row;
-  content.style.transition = 'transform 0.18s ease';
-  content.style.transform = `translateX(${-SWIPE_ACTION_WIDTH}px)`;
-}
-
-function createSwipeRow(contentInner, onDelete) {
-  const delBtn = el('button', {
-    class: 'swipeDeleteBtn',
-    text: '삭제',
-    onclick: (ev) => {
-      ev.stopPropagation();
-      if (__openSwipeRow) closeSwipeRow(__openSwipeRow);
-      onDelete && onDelete();
-    },
-    type: 'button',
-  });
-
-  const actions = el('div', { class: 'swipeActions' }, [delBtn]);
-  const content = el('div', { class: 'swipeContent' }, [contentInner]);
-  const row = el('div', { class: 'swipeRow' }, [actions, content]);
-
-  row.__swipeContent = content;
-  row.__swipeOpen = false;
-
-  let startX = 0;
-  let startY = 0;
-  let lastX = 0;
-  let dragging = false;
-
-  const onDown = (x, y) => {
-    startX = x;
-    startY = y;
-    lastX = row.__swipeOpen ? -SWIPE_ACTION_WIDTH : 0;
-    dragging = false;
-    if (__openSwipeRow && __openSwipeRow !== row) closeSwipeRow(__openSwipeRow);
-  };
-
-  const onMove = (x, y, ev) => {
-    const dx = x - startX;
-    const dy = y - startY;
-    if (!dragging) {
-      if (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy) + 4) {
-        dragging = true;
-        row.classList.add('dragging');
-      } else {
-        return;
-      }
-    }
-    ev && ev.preventDefault && ev.preventDefault();
-    let nx = lastX + dx;
-    if (nx < -SWIPE_ACTION_WIDTH) nx = -SWIPE_ACTION_WIDTH;
-    if (nx > 0) nx = 0;
-    content.style.transition = 'none';
-    content.style.transform = `translateX(${nx}px)`;
-    row.__swipeLiveX = nx;
-  };
-
-  const onUp = () => {
-    row.classList.remove('dragging');
-    const nx = typeof row.__swipeLiveX === 'number' ? row.__swipeLiveX : (row.__swipeOpen ? -SWIPE_ACTION_WIDTH : 0);
-    row.__swipeLiveX = null;
-    if (!dragging) {
-      // 탭으로 닫기
-      if (row.__swipeOpen) closeSwipeRow(row);
-      return;
-    }
-    dragging = false;
-    if (nx < -SWIPE_ACTION_WIDTH * 0.45) openSwipeRow(row);
-    else closeSwipeRow(row);
-  };
-
-  if (window.PointerEvent) {
-    content.addEventListener('pointerdown', (ev) => {
-      if (ev.pointerType === 'mouse' && ev.button !== 0) return;
-      onDown(ev.clientX, ev.clientY);
-      try { content.setPointerCapture(ev.pointerId); } catch {}
-    });
-    content.addEventListener('pointermove', (ev) => onMove(ev.clientX, ev.clientY, ev));
-    content.addEventListener('pointerup', onUp);
-    content.addEventListener('pointercancel', onUp);
-  } else {
-    // fallback (old iOS)
-    content.addEventListener('touchstart', (ev) => {
-      const t = ev.touches && ev.touches[0];
-      if (!t) return;
-      onDown(t.clientX, t.clientY);
-    }, { passive: true });
-    content.addEventListener('touchmove', (ev) => {
-      const t = ev.touches && ev.touches[0];
-      if (!t) return;
-      onMove(t.clientX, t.clientY, ev);
-    }, { passive: false });
-    content.addEventListener('touchend', onUp);
-    content.addEventListener('touchcancel', onUp);
-  }
-
-  return row;
-}
-
 function dotClass(status) {
   if (status === "uploading") return "dot blue blink";
   if (status === "done") return "dot green";
@@ -392,31 +235,14 @@ function safeStorage() {
   }
 }
 
-let supabase = null;
-let __supabaseInitPromise = null;
-
-async function initSupabase() {
-  if (supabase) return supabase;
-  if (__supabaseInitPromise) return __supabaseInitPromise;
-  __supabaseInitPromise = (async () => {
-    const mod = await loadSupabaseModule();
-    const createClient = mod?.createClient || mod?.default?.createClient;
-    if (typeof createClient !== "function") {
-      throw new Error("supabase-js createClient를 찾지 못했습니다.");
-    }
-    supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-      auth: {
-        persistSession: true,
-        autoRefreshToken: true,
-        detectSessionInUrl: true,
-        storage: safeStorage(),
-      },
-    });
-    return supabase;
-  })();
-  return __supabaseInitPromise;
-}
-
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
+    storage: safeStorage(),
+  },
+});
 
 /** =========================
  *  State
@@ -523,14 +349,12 @@ function goBack() {
   }
 
   if (state.job) {
-    cleanupAllThumbBlobs();
     state.job = null;
     state.addOpen = false;
     render();
     return;
   }
   if (state.mode) {
-    cleanupAllThumbBlobs();
     state.mode = null;
     state.job = null;
     state.addOpen = false;
@@ -538,7 +362,6 @@ function goBack() {
     return;
   }
   if (state.company) {
-    cleanupAllThumbBlobs();
     state.company = null;
     state.mode = null;
     state.job = null;
@@ -556,7 +379,6 @@ menuChangeMode?.addEventListener("click", () => {
   closeSettings();
   if (!state.mode) return;
   if (!confirm("업무를 변경하시겠습니까?")) return;
-  cleanupAllThumbBlobs();
   state.mode = null;
   state.job = null;
   state.addOpen = false;
@@ -568,7 +390,6 @@ menuChangeCompany?.addEventListener("click", () => {
   closeSettings();
   if (!state.company) return;
   if (!confirm("회사를 변경하시겠습니까?")) return;
-  cleanupAllThumbBlobs();
   state.company = null;
   state.mode = null;
   state.job = null;
@@ -579,8 +400,6 @@ menuChangeCompany?.addEventListener("click", () => {
 menuSignOut?.addEventListener("click", async () => {
   if (!state.user) return;
   closeSettings();
-  cleanupAllThumbBlobs();
-  await initSupabase();
   await supabase.auth.signOut();
   state.user = null;
   state.company = null;
@@ -634,8 +453,8 @@ function viewerRoleOrder(sample) {
     // 농도는 사진 1장만: UI/뷰어에서는 항상 measurement 슬롯만 사용
     return ["measurement"];
   }
-  // 비산은 start/end 2장만 사용
-  return ['start', 'end'];
+  // 비산은 기본 start/end + 단일/추가 사진 대응
+  return ["start", "end", "single"];
 }
 function buildViewerItemsForDate(dateISO) {
   const samples = state.samplesByDate.get(dateISO) || [];
@@ -1078,54 +897,6 @@ async function nasFetchBlobUrl(relPath) {
 /** =========================
  *  Thumbnails
  *  ========================= */
-// NAS 인증 필요 환경에서 썸네일을 blob URL로 만들어 쓸 수 있다.
-// 이 blob URL을 정리하지 않으면(특히 iOS) 메모리 누적으로 탭이 리프레시/크래시 날 수 있어
-// job/회사/로그아웃 전환 시 정리 루틴을 둔다.
-// (viewer는 state.viewer.objectUrl로 별도 관리)
-const __thumbBlobUrls = new Set();
-
-function _revokeBlobUrl(url) {
-  if (typeof url === "string" && url.startsWith("blob:")) {
-    try { URL.revokeObjectURL(url); } catch {}
-    try { __thumbBlobUrls.delete(url); } catch {}
-  }
-}
-
-function _withThumbVer(sample, role, url) {
-  const ver = sample?._thumbVer?.[role] || 0;
-  if (!ver) return url;
-  if (typeof url === 'string' && url.startsWith('blob:')) return url;
-  try {
-    const u = new URL(String(url), location.href);
-    u.searchParams.set('__v', String(ver));
-    return u.toString();
-  } catch {
-    const s = String(url);
-    const sep = s.includes('?') ? '&' : '?';
-    return s + sep + '__v=' + encodeURIComponent(String(ver));
-  }
-}
-
-function _setThumbUrl(sample, role, url, expMs) {
-  sample._thumbUrl ||= {};
-  sample._thumbExp ||= {};
-  const prev = sample._thumbUrl[role];
-  if (prev && prev !== url) _revokeBlobUrl(prev);
-  const finalUrl = _withThumbVer(sample, role, url);
-
-  sample._thumbUrl[role] = finalUrl;
-  sample._thumbExp[role] = expMs;
-  if (typeof finalUrl === 'string' && finalUrl.startsWith('blob:')) __thumbBlobUrls.add(finalUrl);
-}
-
-function cleanupAllThumbBlobs() {
-  // 전환 시 대량 정리가 필요하니 Set으로만 관리한다.
-  for (const url of Array.from(__thumbBlobUrls)) {
-    _revokeBlobUrl(url);
-  }
-  __thumbBlobUrls.clear();
-}
-
 function ensureThumbUrl(sample, role) {
   const path = sample._photoPath?.[role];
   if (!path) return;
@@ -1136,7 +907,8 @@ function ensureThumbUrl(sample, role) {
 
   // full URL이면 그대로
   if (isHttpUrl(path)) {
-    _setThumbUrl(sample, role, path, Date.now() + 365 * 24 * 3600 * 1000);
+    sample._thumbUrl[role] = path;
+    sample._thumbExp[role] = Date.now() + 365 * 24 * 3600 * 1000;
     return;
   }
 
@@ -1155,14 +927,16 @@ function ensureThumbUrl(sample, role) {
       try {
         // 1) public URL로 먼저 세팅 (NAS가 public 허용이면 이걸로 끝)
         if (NAS_FILE_BASE) {
-          _setThumbUrl(sample, role, joinUrl(NAS_FILE_BASE, rel), Date.now() + 365 * 24 * 3600 * 1000);
+          sample._thumbUrl[role] = joinUrl(NAS_FILE_BASE, rel);
+          sample._thumbExp[role] = Date.now() + 365 * 24 * 3600 * 1000;
         }
 
         // 2) public이 막혀있으면 img는 깨짐 → Authorization으로 blob URL 생성해서 교체
         const auth = await getNasAuthorization();
         if (auth) {
           const blobUrl = await nasFetchBlobUrl(rel);
-          _setThumbUrl(sample, role, blobUrl, Date.now() + 365 * 24 * 3600 * 1000);
+          sample._thumbUrl[role] = blobUrl;
+          sample._thumbExp[role] = Date.now() + 365 * 24 * 3600 * 1000;
         }
       } catch (e) {
         console.warn("NAS 썸네일 생성 실패:", e);
@@ -1185,7 +959,8 @@ function ensureThumbUrl(sample, role) {
   (async () => {
     try {
       const url = await getSignedUrl(path);
-      _setThumbUrl(sample, role, url, Date.now() + SIGNED_URL_TTL_SEC * 1000);
+      sample._thumbUrl[role] = url;
+      sample._thumbExp[role] = Date.now() + SIGNED_URL_TTL_SEC * 1000;
     } catch (e) {
       console.error("Signed URL 생성 실패:", e);
     } finally {
@@ -1239,20 +1014,6 @@ async function uploadAndBindPhoto(sample, role, file) {
 
     sample._photoState[role] = "done";
     sample._photoPath[role] = row?.storage_path || storedPath;
-
-    // 썸네일 캐시 무효화(재촬영 시 썸네일이 안 바뀌는 문제 방지)
-    sample._thumbVer ||= {};
-    sample._thumbVer[role] = (sample._thumbVer[role] || 0) + 1;
-    try {
-      sample._thumbExp ||= {};
-      sample._thumbUrl ||= {};
-      const prev = sample._thumbUrl[role];
-      if (prev) _revokeBlobUrl(prev);
-      delete sample._thumbUrl[role];
-      sample._thumbExp[role] = 0;
-    } catch {
-      // ignore
-    }
 
     ensureThumbUrl(sample, role);
     setFoot("업로드가 완료되었습니다.");
@@ -1443,9 +1204,6 @@ async function loadJobs() {
 }
 
 async function loadJob(job) {
-  // 다른 현장/날짜를 여러 번 넘나들면 NAS 썸네일 blob URL이 누적될 수 있어 전환 시 정리
-  cleanupAllThumbBlobs();
-  if (state.viewer.open) closeViewer();
   state.job = job;
   state.samplesByDate = new Map();
   state.dates = [];
@@ -1650,26 +1408,19 @@ function renderCompanySelect() {
       list.appendChild(
         el("div", { class: "item" }, [
           el("div", {}, [
-            el("div", { class: "item-title", text: safeText(c.name, "(회사)") }),
-            el("div", { class: "item-sub", text: "선택" }),
+            el("div", { class: "item-title", text: c.name }),
           ]),
-          el("div", { class: "row", style: "gap:8px;" }, [
-            el("button", {
-              class: "btn primary small",
-              text: "선택",
-              onclick: async () => {
-                cleanupAllThumbBlobs();
-                state.company = c;
-                state.mode = null;
-                state.job = null;
-                state.jobs = [];
-                state.samplesByDate = new Map();
-                state.dates = [];
-                state.activeDate = null;
-                render();
-              },
-            }),
-          ]),
+          el("button", {
+            class: "btn primary",
+            text: "선택",
+            onclick: async () => {
+              state.company = c;
+              state.mode = null;
+              state.job = null;
+              await loadJobs().catch(() => null);
+              render();
+            },
+          }),
         ])
       );
     }
@@ -1770,21 +1521,26 @@ function renderJobSelect() {
     for (const j of state.jobs) {
       const sub = [safeText(j.address), safeText(j.contractor)].filter(Boolean).join(" · ");
 
-      const content = el("div", { class: "item" }, [
-        el("div", {}, [
-          el("div", { class: "item-title", text: safeText(j.project_name, "(이름없음)") }),
-          el("div", { class: "item-sub", text: sub || `생성: ${String(j.created_at || "").slice(0, 10)}` }),
-        ]),
-        el("div", { class: "row", style: "gap:8px;" }, [
-          el("button", {
-            class: "btn primary small",
-            text: "열기",
-            onclick: (ev) => { ev.stopPropagation(); loadJob(j); },
-          }),
-        ]),
-      ]);
-
-      list.appendChild(createSwipeRow(content, () => deleteJobAndRelated(j)));
+      list.appendChild(
+        el("div", { class: "item" }, [
+          el("div", {}, [
+            el("div", { class: "item-title", text: safeText(j.project_name, "(이름없음)") }),
+            el("div", { class: "item-sub", text: sub || `생성: ${String(j.created_at || "").slice(0, 10)}` }),
+          ]),
+          el("div", { class: "row", style: "gap:8px;" }, [
+            el("button", {
+              class: "btn small",
+              text: "삭제",
+              onclick: () => deleteJobAndRelated(j),
+            }),
+            el("button", {
+              class: "btn primary small",
+              text: "열기",
+              onclick: () => loadJob(j),
+            }),
+          ]),
+        ])
+      );
     }
   }
 
@@ -1812,11 +1568,11 @@ function renderJobWork() {
     );
   }
 
-  const dateAdd = el("input", { class: "input", type: "date", value: iso10(state.activeDate) });
-  const dateAddBtn = el("button", {
-    class: "btn",
-    text: "날짜 추가/이동",
-    onclick: () => {
+  const dateAdd = el("input", {
+    class: "input",
+    type: "date",
+    value: iso10(state.activeDate),
+    onchange: () => {
       const v = iso10(dateAdd.value);
       if (!state.dates.includes(v)) {
         state.dates.push(v);
@@ -1839,7 +1595,7 @@ function renderJobWork() {
     "폐기물 보관지점",
   ];
 
-  let locInput;
+  let locInput = null;
   if (state.mode === "scatter") {
     const sel = el("select", {
       class: "input",
@@ -1852,25 +1608,14 @@ function renderJobWork() {
     }
     sel.value = state.addLoc && SCATTER_LOCATIONS.includes(state.addLoc) ? state.addLoc : SCATTER_LOCATIONS[0];
     locInput = sel;
-  } else {
-    const inp = el("input", {
-      class: "input",
-      placeholder: "시료 위치(예: 거실, 주방...)",
-      oninput: (ev) => {
-        state.addLoc = ev.target.value;
-      },
-    });
-    inp.value = state.addLoc || "";
-    locInput = inp;
   }
-  const timeInput = el("input", { class: "timeInput", placeholder: "시각(선택)", value: state.addTime || "" });
 
   const addSampleBtn = el("button", {
     class: "btn primary",
     text: "시료 추가",
     onclick: async () => {
       try {
-        const loc = safeText(locInput.value);
+        const loc = state.mode === "scatter" ? safeText(locInput?.value) : "";
         const dateISO = state.activeDate || new Date().toISOString().slice(0, 10);
 
         setFoot("시료를 생성 중입니다...");
@@ -1878,13 +1623,6 @@ function renderJobWork() {
 
         // reload to get correct p_index & date lists
         await loadJob(job);
-
-        // time optional
-        const t = safeText(timeInput.value);
-        if (t) {
-          await updateSampleFields(newRow.id || newRow?.[0]?.id, { start_time: t });
-          await loadJob(job);
-        }
 
         setFoot("시료가 추가되었습니다.");
       } catch (e) {
@@ -1903,19 +1641,19 @@ function renderJobWork() {
       ]),
       el("div", { class: "row", style: "gap:8px;" }, [
         dateAdd,
-        dateAddBtn,
       ]),
     ]),
     tabs,
     el("div", { class: "row", style: "margin-top:10px;" }, [
-      el("div", { class: "col", style: "flex:1; min-width:240px;" }, [
-        el("div", { class: "label", text: `시료 추가 · ${ymdDots(state.activeDate)}` }),
-        locInput,
-      ]),
-      el("div", { class: "col" }, [
-        el("div", { class: "label", text: "시각(선택)" }),
-        timeInput,
-      ]),
+      ...(state.mode === "scatter"
+        ? [
+            el("div", { class: "col", style: "flex:1; min-width:240px;" }, [
+              el("div", { class: "label", text: `시료 추가 · ${ymdDots(state.activeDate)}` }),
+              locInput,
+            ]),
+          ]
+        : []),
+      // 농도: 시료 추가 시 위치/시각 입력 제거(아래 등록된 시료에서 입력)
       el("div", { class: "col", style: "justify-content:flex-end;" }, [addSampleBtn]),
     ]),
   ]);
@@ -1933,31 +1671,66 @@ function renderJobWork() {
 
   for (const s of samples) {
   
+    const titleEl = el("div", { class: "sampleTitle", text: `P${s.p_index || "?"} · ${safeText(s.sample_location, "미입력")}` });
+
+    const saveSampleLocation = async (ev) => {
+      const v = safeText(ev.target.value);
+      if (v === safeText(s.sample_location)) return;
+      try {
+        await updateSampleFields(s.id, { sample_location: v });
+        s.sample_location = v;
+        titleEl.textContent = `P${s.p_index || "?"} · ${safeText(v, "미입력")}`;
+        setFoot("시료 위치가 저장되었습니다.");
+      } catch (e) {
+        console.error(e);
+        setFoot(`저장 실패: ${e?.message || e}`);
+      }
+    };
+
+    const saveStartTime = async (ev) => {
+      const v = safeText(ev.target.value);
+      if (v === safeText(s.start_time)) return;
+      try {
+        await updateSampleFields(s.id, { start_time: v });
+        s.start_time = v;
+        setFoot("측정시작시간이 저장되었습니다.");
+      } catch (e) {
+        console.error(e);
+        setFoot(`저장 실패: ${e?.message || e}`);
+      }
+    };
+
     const left = el("div", { class: "sampleLeft" }, [
-      el("div", { class: "sampleTitle", text: `P${s.p_index || "?"} · ${safeText(s.sample_location, "미입력")}` }),
+      titleEl,
       el("div", { class: "sampleMeta" }, [
         el("div", { class: "metaLine" }, [
           el("span", { class: "label", text: ymdDots(s.measurement_date) }),
         ]),
-        el("div", { class: "metaLine" }, [
-          el("span", { class: "label", text: "시각" }),
+        el("div", { class: "metaLine", style: "flex-wrap:nowrap; gap:8px;" }, [
+          ...(state.mode === "scatter"
+            ? [el("span", { class: "label", text: safeText(s.sample_location, "미입력") })]
+            : [
+                el("input", {
+                  class: "input",
+                  style: "flex:1; min-width:160px; padding:8px 10px; font-size:13px;",
+                  value: safeText(s.sample_location),
+                  placeholder: "시료 위치",
+                  onchange: saveSampleLocation,
+                  onblur: saveSampleLocation,
+                }),
+              ]),
+
+          el("span", { class: "label", text: "측정시작시간" }),
           el("input", {
             class: "timeInput",
-            value: safeText(s.start_time),
-            placeholder: "예: 10:30",
-            onblur: async (ev) => {
-              const v = safeText(ev.target.value);
-              if (v === safeText(s.start_time)) return;
-              try {
-                await updateSampleFields(s.id, { start_time: v });
-                s.start_time = v;
-                setFoot("시각이 저장되었습니다.");
-              } catch (e) {
-                console.error(e);
-                setFoot(`저장 실패: ${e?.message || e}`);
-              }
-            },
-          }),        ]),
+            type: "time",
+            step: "60",
+            value: safeText(s.start_time) || "",
+            onchange: saveStartTime,
+            onblur: saveStartTime,
+          }),
+          el("button", { class: "btn small", text: "삭제", onclick: () => deleteSample(s) }),
+        ]),
       ]),
     ]);
 
@@ -1996,8 +1769,7 @@ function renderJobWork() {
       );
     }
 
-    const row = el("div", { class: "sampleRow" }, [left, right]);
-    root.appendChild(createSwipeRow(row, () => deleteSample(s)));
+    root.appendChild(el("div", { class: "sampleRow" }, [left, right]));
   }
 }
 
@@ -2009,7 +1781,6 @@ function renderJobWork() {
   try { window.__APP_BOOTED = false; } catch {}
   try {
     setFoot("초기화 중...");
-    await initSupabase();
     await loadSession();
     if (state.user) {
       await loadCompanies();
