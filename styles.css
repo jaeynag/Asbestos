@@ -114,11 +114,9 @@ body{
 .footer{
   padding:10px 16px 16px;
   padding-bottom:calc(16px + env(safe-area-inset-bottom));
+  display:none !important;
 }
 .footStatus{ font-size:12px; color:var(--muted); min-height:16px; }
-
-/* 페이지 최하단 알림 멘트 숨김 */
-.footer{ display:none !important; }
 
 .card{
   background:var(--card);
@@ -169,37 +167,12 @@ select{
   background:#fff;
   cursor:pointer;
   font-size:13px;
-  display:flex;
-  align-items:center;
-  gap:8px;
 }
 .tab.active{ background:#fff; color:#111; border-color:#111; font-weight:800; }
+.tab{ display:flex; align-items:center; gap:8px; }
+.tabX{ font-size:14px; line-height:1; opacity:.55; padding:0 2px; }
+.tabX:active{ opacity:.9; }
 
-.tabText{ line-height:1; }
-.tabX{
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  width:18px;
-  height:18px;
-  border-radius:999px;
-  font-size:14px;
-  line-height:1;
-  color:var(--muted);
-}
-.tabX:active{ filter:brightness(0.9); }
-
-/* 날짜 선택 후 적용(체크) 버튼 */
-.dateApplyBtn{
-  width:40px;
-  height:40px;
-  padding:0;
-  border-radius:999px;
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  font-weight:900;
-}
 
 .list{ display:flex; flex-direction:column; gap:8px; }
 .item{
@@ -308,18 +281,7 @@ select{
 }
 
 .sampleLeft{ min-width:220px; flex:1; }
-.sampleTitle{ font-weight:900; font-size:14px; line-height:1.2; display:flex; align-items:center; gap:6px; }
-.sampleLocEdit{
-  flex:1;
-  min-width:90px;
-  max-width:260px;
-  padding:4px 8px;
-  border:1px solid var(--line);
-  border-radius:10px;
-  font-size:14px;
-  font-weight:900;
-  background:#fff;
-}
+.sampleTitle{ font-weight:900; font-size:14px; line-height:1.2; }
 .sampleMeta{
   margin-top:6px;
   display:flex;
@@ -507,14 +469,15 @@ select{
 
 /* ===== Swipe to delete ===== */
 .swipeRow{ position:relative; overflow:hidden; border-radius:12px; background:#fff; }
+/* swipe hairline fix */
 .swipeActions{
+  background:#fff;
   position:absolute;
   inset:0;
   display:flex;
   justify-content:flex-end;
   align-items:stretch;
   z-index:0;
-  background:#fff;
 }
 .swipeDeleteBtn{
   width:92px;
@@ -537,6 +500,18 @@ select{
 .swipeRow.dragging .swipeContent{ transition:none !important; }
 
 .sectionLabel{ display:block; margin-bottom:10px; }
+
+
+.sampleTitle{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.sampleTitlePrefix{ white-space:nowrap; }
+.sampleLocEdit{
+  border:1px solid var(--line);
+  border-radius:10px;
+  padding:8px 10px;
+  font-size:14px;
+  min-width:140px;
+  flex:1 1 140px;
+}
 
 /* ===== Utilities ===== */
 [hidden]{ display:none !important; }
