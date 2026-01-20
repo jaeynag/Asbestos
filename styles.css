@@ -55,8 +55,15 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
 .menuSep{ height:1px; background:var(--line); }
 
 .root{ padding: 0 16px 16px; flex:1; }
-.footer{ padding: 10px 16px 16px; }
-.footStatus{ font-size:12px; color:var(--muted); min-height:16px; }
+.footer{ padding: 6px 16px 10px; }
+.footStatus{
+  font-size:12px;
+  color:var(--muted);
+  min-height:16px;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
 
 .card{ background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; margin: 10px 0; box-shadow: 0 1px 0 rgba(0,0,0,0.02); }
 .row{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
@@ -153,6 +160,39 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
 .xBtn:active{ filter:brightness(0.97); }
 
 /* ===== Sample row (더 콤팩트) ===== */
+.swipeItem{
+  position:relative;
+  border:1px solid var(--line);
+  border-radius:12px;
+  background:#fff;           /* 우측 끝 미세 틈에서 빨강 비침 방지 */
+  overflow:hidden;
+}
+.swipeActions{
+  position:absolute;
+  top:0;
+  right:0;
+  bottom:0;
+  width:88px;
+  display:flex;
+  justify-content:flex-end;
+  align-items:stretch;
+  background:#fff;
+}
+.swipeDeleteBtn{
+  width:88px;
+  border:0;
+  background:var(--danger);
+  color:#fff;
+  font-weight:800;
+  cursor:pointer;
+}
+.swipeContent{
+  transform:translateX(0px);
+  transition: transform .15s ease;
+  will-change: transform;
+}
+.swipeItem.open .swipeContent{ transform:translateX(-88px); }
+
 .sampleRow{
   position:relative;
   display:flex;
@@ -161,11 +201,7 @@ body{ margin:0; font-family: system-ui, -apple-system, "Malgun Gothic", Arial, s
   justify-content:space-between;
   gap:10px;
   padding:10px 12px;
-  padding-left:44px;           /* X 자리 */
-  border:1px solid var(--line);
-  border-radius:12px;
-  background:#fff;
-  overflow:hidden;
+  padding-left:12px;
 }
 
 .sampleLeft{ min-width: 220px; flex: 1; }
