@@ -1826,14 +1826,6 @@ function renderJobWork() {
     class: 'btn small',
     text: '달력',
     onclick: () => {
-      openDateModal();
-    },
-  });
-
-  const openCalendarBtn = el('button', {
-    class: 'btn small',
-    text: '달력',
-    onclick: () => {
       __datePicked = iso10(state.activeDate || new Date());
       openDateModal();
     },
