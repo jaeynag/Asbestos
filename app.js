@@ -200,19 +200,69 @@ function formatFastApiDetail(detail) {
   return String(detail || "");
 }
 
-function setFoot(msg) {
-  // 알림은 스크롤을 만들지 않게 상단 토스트로 표시
+let __loadingEl = null;
+let __loadingCount = 0;
+
+function _ensureLoadingEl() {
+  if (__loadingEl) return __loadingEl;
   try {
+    __loadingEl = document.getElementById('loadingOverlay');
+    if (__loadingEl) return __loadingEl;
+    const overlay = document.createElement('div');
+    overlay.id = 'loadingOverlay';
+    overlay.className = 'loadingOverlay';
+    const spinner = document.createElement('div');
+    spinner.className = 'spinner';
+    overlay.appendChild(spinner);
+    document.body.appendChild(overlay);
+    __loadingEl = overlay;
+  } catch {
+    // ignore
+  }
+  return __loadingEl;
+}
+
+function showLoading() {
+  __loadingCount = Math.max(0, (__loadingCount || 0)) + 1;
+  const el = _ensureLoadingEl();
+  if (el) el.style.display = 'flex';
+}
+
+function hideLoading(force = false) {
+  if (force) {
+    __loadingCount = 0;
+  } else {
+    __loadingCount = Math.max(0, (__loadingCount || 0) - 1);
+  }
+  if (__loadingCount === 0) {
+    const el = _ensureLoadingEl();
+    if (el) el.style.display = 'none';
+  }
+}
+
+function setFoot(msg) {
+  // 요청: 멘트 토스트 대신 중앙 로딩 표시
+  // - "~중", "불러오는 중", "진행 중" 등의 상태는 로딩 표시
+  // - 그 외 메시지는 화면에 띄우지 않되(가림/스크롤 방지), 콘솔로만 남김
+  try {
+    const s = String(msg || '').trim();
+    const isLoadingMsg = /(처리|불러오|진행|업로드|삭제|초기화)/.test(s) && /(중|진행)/.test(s);
+    if (isLoadingMsg) {
+      showLoading();
+    } else {
+      // 완료/실패/준비 등은 로딩 종료
+      if (s) hideLoading();
+      else hideLoading(true);
+      if (s) {
+        try { console.log('[status]', s); } catch {}
+      }
+    }
+
+    // 기존 footStatus는 더 이상 토스트로 사용하지 않음(레이아웃/가림 방지)
     const el = document.getElementById('footStatus');
-    if (!el) return;
-    el.textContent = String(msg || '');
-    el.style.opacity = msg ? '1' : '0';
-    // 연속 호출 시 타이머 갱신
-    clearTimeout(el.__hideTimer);
-    if (msg) {
-      el.__hideTimer = setTimeout(() => {
-        try { el.style.opacity = '0'; } catch {}
-      }, 2500);
+    if (el) {
+      el.textContent = s;
+      el.style.opacity = '0';
     }
   } catch {
     // ignore
@@ -435,6 +485,8 @@ function safeStorage() {
 
 let supabase = null;
 let __supabaseInitPromise = null;
+let __authSubscription = null;
+let __signingOut = false;
 
 async function initSupabase() {
   if (supabase) return supabase;
@@ -618,8 +670,18 @@ menuChangeCompany?.addEventListener("click", () => {
 });
 
 menuSignOut?.addEventListener("click", async () => {
-  closeSettings();
-  cleanupAllThumbBlobs();
+  __signingOut = true;
+  try {
+    // auth listener가 기존 세션으로 다시 state.user를 복구시키는 걸 막기 위해 먼저 구독 해제
+    try {
+      if (__authSubscription && typeof __authSubscription.unsubscribe === 'function') {
+        __authSubscription.unsubscribe();
+      }
+    } catch {}
+    __authSubscription = null;
+
+    closeSettings();
+    cleanupAllThumbBlobs();
 
   // signOut은 네트워크/모듈 로드 문제로 실패할 수 있어,
   // 실패하더라도 로컬 토큰/상태를 정리해서 반드시 로그아웃 상태로 만든다.
@@ -688,6 +750,9 @@ menuSignOut?.addEventListener("click", async () => {
   state.addOpen = false;
   setFoot("로그아웃되었습니다.");
   render();
+  } finally {
+    __signingOut = false;
+  }
 });
 
 /** =========================
@@ -926,12 +991,20 @@ async function fetchCompanies() {
   return data || [];
 }
 
-async function fetchJobs(companyId, mode) {
-  const { data, error } = await supabase
+async function fetchJobs(companyId, modeOrModes) {
+  let q = supabase
     .from(T_JOBS)
     .select("id,company_id,mode,project_name,address,contractor,status,created_at,last_upload_at")
-    .eq("company_id", companyId)
-    .eq("mode", mode)
+    .eq("company_id", companyId);
+
+  if (Array.isArray(modeOrModes)) {
+    const modes = modeOrModes.filter(Boolean);
+    if (modes.length) q = q.in("mode", modes);
+  } else {
+    q = q.eq("mode", modeOrModes);
+  }
+
+  const { data, error } = await q
     .order("last_upload_at", { ascending: false, nullsFirst: false })
     .order("created_at", { ascending: false })
     .limit(50);
@@ -1548,20 +1621,14 @@ async function loadJobs() {
     setFoot("현장 목록을 불러오는 중입니다...");
     await initSupabase();
     await loadSession();
-    state.jobs = await fetchJobs(state.company.id, state.mode);
-    // 구버전/타 시스템 호환: jobs.mode가 'C'/'S'로 저장된 경우가 있어,
-    // 새 모드값(density/scatter)로 0건이면 한 번만 재시도한다.
-    if (!state.jobs.length) {
-      const legacy = state.mode === 'density' ? 'C' : (state.mode === 'scatter' ? 'S' : null);
-      if (legacy) {
-        try {
-          const again = await fetchJobs(state.company.id, legacy);
-          if (again && again.length) state.jobs = again;
-        } catch (e) {
-          // ignore legacy fallback errors
-        }
-      }
-    }
+        const modes = [];
+    if (state.mode) modes.push(state.mode);
+    // 구버전/타 시스템 호환: jobs.mode가 'C'/'S'로 저장된 경우가 있어 같이 조회한다.
+    if (state.mode === 'density') { modes.push('C', 'c'); }
+    if (state.mode === 'scatter') { modes.push('S', 's'); }
+    // 중복 제거
+    const uniq = Array.from(new Set(modes));
+    state.jobs = await fetchJobs(state.company.id, uniq);
     setFoot("준비되었습니다.");
   } catch (e) {
     console.error(e);
@@ -2261,29 +2328,43 @@ function renderJobWork() {
     try { window.__APP_BOOTED = true; } catch {}
 
     // auth state change
-    supabase.auth.onAuthStateChange(async (_event, session) => {
-      state.user = session?.user || null;
-      if (session?.access_token && session?.refresh_token) {
-        try {
-          await supabase.auth.setSession({
-            access_token: session.access_token,
-            refresh_token: session.refresh_token,
-          });
-        } catch (e) {
-          console.warn('setSession sync failed:', e);
+    try {
+      if (__authSubscription && typeof __authSubscription.unsubscribe === 'function') {
+        __authSubscription.unsubscribe();
+      }
+    } catch {}
+
+    try {
+      const { data } = supabase.auth.onAuthStateChange(async (_event, session) => {
+        if (__signingOut) return;
+        state.user = session?.user || null;
+
+        if (session?.access_token && session?.refresh_token) {
+          try {
+            await supabase.auth.setSession({
+              access_token: session.access_token,
+              refresh_token: session.refresh_token,
+            });
+          } catch (e) {
+            console.warn('setSession sync failed:', e);
+          }
         }
-      }
-      if (state.user) {
-        await loadCompanies().catch(() => null);
-      } else {
-        state.company = null;
-        state.mode = null;
-        state.job = null;
-        state.jobs = [];
-        state.companies = [];
-      }
-      render();
-    });
+
+        if (state.user) {
+          await loadCompanies().catch(() => null);
+        } else {
+          state.company = null;
+          state.mode = null;
+          state.job = null;
+          state.jobs = [];
+          state.companies = [];
+        }
+        render();
+      });
+      __authSubscription = data?.subscription || null;
+    } catch (e) {
+      console.warn('onAuthStateChange attach failed:', e);
+    }
 
     // initial companies if logged in
     if (state.user && !state.companies.length) {
