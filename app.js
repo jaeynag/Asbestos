@@ -19,14 +19,16 @@
 //   - NAS:             "https://.../files/.../role.jpg" (URL)
 
 // NOTE: iOS 홈화면(PWA)/일부 WebView에서 외부 ESM CDN 로드가 간헐적으로 실패하는 케이스가 있어
-// supabase-js는 동적 import로 로드합니다(로컬 파일 우선, 실패 시 CDN).
+// supabase-js는 동적 import로 로드합니다(CDN 우선, 실패 시 로컬).
 async function loadSupabaseModule() {
   const candidates = [
-    // 로컬로 번들해두면 PWA 안정성이 확 올라감(추천)
+    // 1) 온라인(일반 브라우저/PC)에서는 CDN이 가장 안정적
+    "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm",
+    // 2) jsdelivr가 막혔을 때 대체
+    "https://esm.sh/@supabase/supabase-js@2",
+    // 3) 로컬로 번들해두면 PWA 안정성이 확 올라감(여기부터는 오프라인/특수 환경용)
     "./vendor/supabase-js@2.esm.js",
     "./vendor/supabase-js@2/+esm.js",
-    // 최후 fallback
-    "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm",
   ];
   let lastErr = null;
   for (const url of candidates) {
@@ -640,8 +642,22 @@ menuSignOut?.addEventListener("click", async () => {
   if (!state.user) return;
   closeSettings();
   cleanupAllThumbBlobs();
-  await initSupabase();
-  await supabase.auth.signOut();
+  try {
+    await initSupabase();
+    await supabase.auth.signOut();
+  } catch (e) {
+    // supabase 모듈 로드 실패/네트워크 오류가 있어도 UI/상태는 로그아웃으로 정리한다.
+    console.warn("signOut failed", e);
+    try {
+      // supabase-js가 남긴 세션키(대부분 sb-<project>-auth-token)를 제거
+      for (let i = 0; i < (localStorage?.length || 0); i++) {
+        const k = localStorage.key(i);
+        if (k && /^sb-.*-auth-token$/i.test(k)) {
+          try { localStorage.removeItem(k); } catch (_) {}
+        }
+      }
+    } catch (_) {}
+  }
   state.user = null;
   state.company = null;
   state.mode = null;
@@ -1491,15 +1507,27 @@ async function loadSession() {
 
 async function loadCompanies() {
   setFoot("회사 목록을 불러오는 중입니다...");
-  state.companies = await fetchCompanies();
-  setFoot("준비되었습니다.");
+  try {
+    state.companies = await fetchCompanies();
+    setFoot("준비되었습니다.");
+  } catch (e) {
+    console.error(e);
+    state.companies = [];
+    setFoot(`회사 목록 불러오기 실패: ${e?.message || e}`);
+  }
 }
 
 async function loadJobs() {
   if (!state.company || !state.mode) return;
   setFoot("현장 목록을 불러오는 중입니다...");
-  state.jobs = await fetchJobs(state.company.id, state.mode);
-  setFoot("준비되었습니다.");
+  try {
+    state.jobs = await fetchJobs(state.company.id, state.mode);
+    setFoot("준비되었습니다.");
+  } catch (e) {
+    console.error(e);
+    state.jobs = [];
+    setFoot(`현장 목록 불러오기 실패: ${e?.message || e}`);
+  }
 }
 
 async function loadJob(job) {
