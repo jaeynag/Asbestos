@@ -8,7 +8,7 @@
   <meta http-equiv="Expires" content="0" />
   <meta name="color-scheme" content="light" />
   <title>Asbestos field photos</title>
-  <link rel="stylesheet" href="./styles.css?v=20260120-01" />
+  <link rel="stylesheet" href="./styles.css?v=20260120-02" />
   <link rel="icon" href="./favicon.ico" />
   <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
   <link rel="manifest" href="./manifest.json" />
@@ -90,6 +90,28 @@
     </div>
   </div>
 
+  <!-- 날짜 관리 모달(달력 + 날짜 삭제) -->
+  <div id="dateModal" class="modal" hidden>
+    <div class="modal-backdrop"></div>
+    <div class="modal-card date-card">
+      <div class="modal-head">
+        <div class="modal-title">날짜 선택</div>
+        <button id="dateModalClose" class="btn ghost" type="button">닫기</button>
+      </div>
+      <div class="modal-body">
+        <div class="datePickRow">
+          <input id="dateModalInput" class="input" type="date" />
+        </div>
+        <div class="label" style="margin-top:10px;">등록된 날짜</div>
+        <div id="dateModalList" class="dateChipList"></div>
+      </div>
+      <div class="modal-actions">
+        <div></div>
+        <button id="dateModalCheck" class="btn primary" type="button" aria-label="확인">✓</button>
+      </div>
+    </div>
+  </div>
+
   <!--
     전사 공통 설정 (직원/다른 PC 포함)
     - NAS에서 GitHub Pages를 리버스 프록시로 제공하는 경우, 기본값(현재 도메인)이 자동으로 NAS 업로드로 동작합니다.
@@ -104,6 +126,6 @@
     };
   </script>
 
-  <script type="module" src="./app.js?v=20260120-01"></script>
+  <script type="module" src="./app.js?v=20260120-02"></script>
 </body>
 </html>
