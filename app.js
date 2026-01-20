@@ -1450,7 +1450,41 @@ async function loadCompanies() {
 async function loadJobs() {
   if (!state.company || !state.mode) return;
   setFoot("현장 목록을 불러오는 중입니다...");
-  state.jobs = await fetchJobs(state.company.id, state.mode);
+  try {
+    state.jobs = await fetchJobs(state.company.id, state.mode);
+  } catch (e) {
+    // 로그인 직후(특히 iOS 홈화면/PWA/WebView) 토큰 반영 타이밍 때문에
+    // RLS가 잠깐 막히는 케이스가 있어 1회만 재시도한다.
+    const msg = String(e?.message || e || '').toLowerCase();
+    const status = e?.status;
+    const maybeAuthTiming = status === 401 || status === 403
+      || msg.includes('jwt')
+      || msg.includes('not authorized')
+      || msg.includes('unauthorized')
+      || msg.includes('row level security')
+      || msg.includes('permission');
+
+    if (maybeAuthTiming) {
+      try {
+        await new Promise((r) => setTimeout(r, 180));
+        const sess = (await supabase.auth.getSession())?.data?.session || null;
+        await syncSessionTokens(sess);
+        state.jobs = await fetchJobs(state.company.id, state.mode);
+      } catch (e2) {
+        console.error(e2);
+        const m2 = e2?.message || String(e2);
+        setFoot(m2);
+        alert(m2);
+        return;
+      }
+    } else {
+      console.error(e);
+      const m = e?.message || String(e);
+      setFoot(m);
+      alert(m);
+      return;
+    }
+  }
   setFoot("준비되었습니다.");
 }
 
