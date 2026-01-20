@@ -126,8 +126,49 @@
     };
   </script>
 
-  <!-- Supabase UMD (공식 CDN). app.js가 ESM import 없이 window.supabase를 사용하도록 전환 -->
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="./app.js?v=20260120-03"></script>
+
+  <!-- Supabase UMD loader (explicit dist/umd path for Safari/iOS). Then load app.js. -->
+  <script>
+    (function () {
+      var APP_SRC = "./app.js?v=20260120-05";
+      var SB_SRC_1 = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js";
+      var SB_SRC_2 = "https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js";
+
+      function setStatus(msg) {
+        try {
+          var el = document.getElementById('footStatus');
+          if (el) el.textContent = msg;
+        } catch (e) {}
+      }
+
+      function loadScript(src, onOk, onErr) {
+        var s = document.createElement('script');
+        s.src = src;
+        s.async = true;
+        s.onload = function () { onOk && onOk(); };
+        s.onerror = function () { onErr && onErr(); };
+        document.head.appendChild(s);
+      }
+
+      function loadApp() {
+        loadScript(APP_SRC, null, function () {
+          setStatus('app.js 로드 실패');
+        });
+      }
+
+      setStatus('라이브러리 로드 중...');
+      loadScript(SB_SRC_1, function () {
+        setStatus('준비 중...');
+        loadApp();
+      }, function () {
+        loadScript(SB_SRC_2, function () {
+          setStatus('준비 중...');
+          loadApp();
+        }, function () {
+          setStatus('Supabase 로드 실패');
+        });
+      });
+    })();
+  </script>
 </body>
 </html>
