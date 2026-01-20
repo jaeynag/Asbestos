@@ -112,28 +112,10 @@ body{
 /* ===== Page layout ===== */
 .root{ padding:0 16px 16px; flex:1; }
 .footer{
-  display:block;
-  height:0;
+  padding:10px 16px 16px;
+  padding-bottom:calc(16px + env(safe-area-inset-bottom));
 }
-.footStatus{
-  display:block;
-  position:fixed;
-  top:calc(56px + env(safe-area-inset-top));
-  left:50%;
-  transform:translateX(-50%);
-  width:min(820px, calc(100vw - 32px));
-  padding:10px 12px;
-  background:#fff;
-  border:1px solid var(--line);
-  border-radius:12px;
-  box-shadow:0 10px 30px rgba(0,0,0,0.08);
-  font-size:13px;
-  color:var(--muted);
-  opacity:0;
-  transition:opacity .18s ease;
-  pointer-events:none;
-  z-index:60;
-}
+.footStatus{ font-size:12px; color:var(--muted); min-height:16px; }
 
 .card{
   background:var(--card);
@@ -509,23 +491,6 @@ select{
   overflow:hidden;
 }
 .swipeRow.dragging .swipeContent{ transition:none !important; }
-
-/* 날짜 선택 후 우측하단 체크(등록) 버튼 */
-.dateApplyFab{
-  position:fixed;
-  right:16px;
-  bottom:16px;
-  width:52px;
-  height:52px;
-  border-radius:999px;
-  border:0;
-  background:var(--primary);
-  color:#fff;
-  font-size:24px;
-  font-weight:900;
-  box-shadow:0 8px 20px rgba(0,0,0,0.18);
-  z-index:60;
-}
 
 .sectionLabel{ display:block; margin-bottom:10px; }
 
