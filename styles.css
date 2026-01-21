@@ -114,7 +114,6 @@ body{
 .footer{
   padding:10px 16px 16px;
   padding-bottom:calc(16px + env(safe-area-inset-bottom));
-  display:none !important;
 }
 .footStatus{ font-size:12px; color:var(--muted); min-height:16px; }
 
@@ -152,7 +151,6 @@ select{
   cursor:pointer;
 }
 .btn.primary{ background:var(--pri); color:var(--priText); border-color:var(--pri); }
-.btn.addSampleBtn{ padding:12px; border-radius:12px; min-height:44px; display:flex; align-items:center; justify-content:center; }
 .btn.ghost{ background:transparent; }
 .btn.small{ padding:7px 8px; font-size:13px; }
 .btn.block{ width:100%; }
@@ -169,11 +167,14 @@ select{
   cursor:pointer;
   font-size:13px;
 }
+.tabX{
+  margin-left:8px;
+  font-weight:900;
+  color:#666;
+  cursor:pointer;
+  user-select:none;
+}
 .tab.active{ background:#fff; color:#111; border-color:#111; font-weight:800; }
-.tab{ display:flex; align-items:center; gap:8px; }
-.tabX{ font-size:14px; line-height:1; opacity:.55; padding:0 2px; }
-.tabX:active{ opacity:.9; }
-
 
 .list{ display:flex; flex-direction:column; gap:8px; }
 .item{
@@ -239,7 +240,7 @@ select{
 }
 .dateControls .dateCol{ flex:1 1 auto; min-width:0; }
 .dateControls .dateInput{
-  width:150px;
+  width:140px;
   padding:8px 10px;
   font-size:13px;
   border-radius:10px;
@@ -247,25 +248,6 @@ select{
 .dateControls > .btn{ flex:0 0 auto; width:auto; white-space:nowrap; }
 
 /* ===== Sample row ===== */
-.xBtn{
-  position:absolute;
-  left:10px;
-  top:12px;
-  width:26px;
-  height:26px;
-  border-radius:999px;
-  border:1px solid var(--line);
-  background:#fff;
-  color:#666;
-  font-weight:900;
-  font-size:16px;
-  line-height:24px;
-  padding:0;
-  cursor:pointer;
-  z-index:2;
-}
-.xBtn:active{ filter:brightness(0.97); }
-
 .sampleRow{
   position:relative;
   display:flex;
@@ -282,6 +264,8 @@ select{
 
 .sampleLeft{ min-width:220px; flex:1; }
 .sampleTitle{ font-weight:900; font-size:14px; line-height:1.2; }
+.sampleTitleLine{ display:flex; align-items:center; gap:10px; }
+.sampleLocEdit{ flex:1 1 auto; min-width:0; padding:10px 12px; font-size:15px; border-radius:12px; }
 .sampleMeta{
   margin-top:6px;
   display:flex;
@@ -468,10 +452,8 @@ select{
 .choiceSub{ display:none !important; }
 
 /* ===== Swipe to delete ===== */
-.swipeRow{ position:relative; overflow:hidden; border-radius:12px; background:#fff; }
-/* swipe hairline fix */
+.swipeRow{ position:relative; overflow:hidden; border-radius:12px; }
 .swipeActions{
-  background:#fff;
   position:absolute;
   inset:0;
   display:flex;
@@ -501,18 +483,6 @@ select{
 
 .sectionLabel{ display:block; margin-bottom:10px; }
 
-
-.sampleTitle{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
-.sampleTitlePrefix{ white-space:nowrap; }
-.sampleLocEdit{
-  border:1px solid var(--line);
-  border-radius:10px;
-  padding:8px 10px;
-  font-size:14px;
-  min-width:140px;
-  flex:1 1 140px;
-}
-
 /* ===== Utilities ===== */
 [hidden]{ display:none !important; }
 
@@ -540,6 +510,7 @@ select{
   /* 날짜 컨트롤: 한 줄 고정 */
   .dateControls{ flex-wrap:nowrap !important; }
   .dateControls .dateCol{ flex-basis:auto !important; }
+  .dateControls .dateInput{ width:120px; padding:6px 8px; font-size:12px; }
   .dateControls > .btn{ width:auto !important; }
 
   /* 뷰어 버튼 */
