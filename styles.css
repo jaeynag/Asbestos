@@ -344,6 +344,9 @@ select{
   width:100%;
 }
 
+[hidden]{ display:none !important; }
+.modal[hidden], .menu[hidden]{ display:none !important; }
+
 /* ===== Modal ===== */
 .modal{
   position:fixed;
