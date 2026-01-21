@@ -2092,7 +2092,7 @@ function renderJobWork() {
                 refresh_token: session.refresh_token,
               });
           } catch (e) {
-            console.warm('setSession sync failed:', e);
+            console.warn('setSession sync failed:', e);
           }
         }
         if (state.user) {
