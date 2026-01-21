@@ -115,7 +115,7 @@ body { overflow:hidden; }
 /* ===== Page layout ===== */
 .root{ 
   padding:0 16px 16px;
-  padding-bottom:calc(80px + env(safe-area-inset-botoom));
+  padding-bottom:calc(96px + env(safe-area-inset-botoom));
   flex:1;
 }
 .footer{ display:none; }
