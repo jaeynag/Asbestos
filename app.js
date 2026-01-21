@@ -319,6 +319,7 @@ function createSwipeRow(contentInner, onDelete) {
       }
     });
   }
+
     content.addEventListener('pointermove', (ev) => onMove(ev.clientX, ev.clientY, ev));
     content.addEventListener('pointerup', onUp);
     content.addEventListener('pointercancel', onUp);
