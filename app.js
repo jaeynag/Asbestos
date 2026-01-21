@@ -398,6 +398,7 @@ function safeStorage() {
 
 let supabase = null;
 let __supabaseInitPromise = null;
+let __authStateHandling = false;
 
 async function initSupabase() {
   if (supabase) return supabase;
@@ -2079,18 +2080,25 @@ function renderJobWork() {
 
     // auth state change
     supabase.auth.onAuthStateChange(async (_event, session) => {
-      state.user = session?.user || null;
-      if (state.user) {
-        await loadCompanies().catch(() => null);
-      } else {
-        state.company = null;
-        state.mode = null;
-        state.job = null;
-        state.jobs = [];
-        state.companies = [];
-      }
+        if (__authStateHandling) return;
+        __authStateHandling = true;
+        try {
+          state.user = session?.user || null;
+
+          if (state.user) {
+            await loadCompanies().catch(() => null);
+          } else {
+            state.company = null;
+            state.mode = null;
+            state.job = null;
+            state.jobs = [];
+            state.companies = [];
+          }
       render();
-    });
+    } finally {
+      __authStateHandling = false;
+    }
+  });
 
     // initial companies if logged in
     if (state.user && !state.companies.length) {
