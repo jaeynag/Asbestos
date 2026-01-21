@@ -524,3 +524,12 @@ select{
 @media (max-width: 420px){
   .choiceGrid{ grid-template-columns:1fr; }
 }
+
+
+/* 날짜 선택 후 체크(등록) 버튼 */
+.dateApplyBtn{
+  width:38px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
