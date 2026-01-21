@@ -1836,27 +1836,18 @@ function renderJobWork() {
     type: "date",
     value: iso10(state.dateDraft || state.activeDate),
     onchange: (ev) => {
-      state.dateDraft = iso10(ev.target.value);
-    },
-  });
-
-  const applyDateBtn = el("button", {
-    class: "iconBtn",
-    type: "button",
-    ariaLabel: "날짜 적용",
-    onclick: () => {
-      const v = iso10(state.dateDraft || datePick.value || state.activeDate);
+      const v = iso10(ev.target.value || state.activeDate);
+      state.dateDraft = v;
       if (!state.dates.includes(v)) {
         state.dates.push(v);
         state.dates.sort();
         state.samplesByDate.set(v, []);
       }
       state.activeDate = v;
+      state.addOpen = false;
       render();
     },
-  }, [
-    el("span", { text: "✓" }),
-  ]);
+  });
 
   // add sample
   const SCATTER_LOCATIONS = [
@@ -1885,7 +1876,7 @@ function renderJobWork() {
   }
 
   const addSampleBtn = el("button", {
-    class: "btn primary",
+    class: "btn primary addSampleBtn",
     text: "시료 추가",
     onclick: async () => {
       try {
@@ -1911,7 +1902,6 @@ function renderJobWork() {
       el("div", { class: "label", text: "날짜" }),
       datePick,
     ]),
-    el("div", { class: "col", style: "justify-content:flex-end;" }, [applyDateBtn]),
   ]);
 
   const addRowChildren = [];
@@ -1923,15 +1913,16 @@ function renderJobWork() {
       ])
     );
   } else {
-    // 농도: 등록칸에서 위치/시각 입력 완전 삭제
+    // 농도: 등록칸에서 위치/시각 입력 완전 삭제 (버튼만 표시)
     addRowChildren.push(
       el("div", { class: "col", style: "flex:1; min-width:240px;" }, [
-        el("div", { class: "label", text: `시료 추가 · ${ymdDots(state.activeDate)}` }),
-        el("div", { class: "label", text: "(시료 위치는 아래 목록에서 입력)" }),
+        addSampleBtn,
       ])
     );
   }
-  addRowChildren.push(el("div", { class: "col", style: "justify-content:flex-end;" }, [addSampleBtn]));
+  if (state.mode === "scatter") {
+    addRowChildren.push(el("div", { class: "col", style: "justify-content:flex-end;" }, [addSampleBtn]));
+  }
 
   const head = el("div", { class: "card" }, [
     el("div", { class: "row space" }, [
@@ -1985,17 +1976,13 @@ function renderJobWork() {
       titleNode = el("div", { class: "sampleTitle", text: `P${s.p_index || "?"} · ${safeText(s.sample_location, "미입력")}` });
     }
 
-    const metaLines = [
-      el("div", { class: "metaLine" }, [
-        el("span", { class: "label", text: ymdDots(s.measurement_date) }),
-      ]),
-    ];
+    const metaLines = [];
 
-    // scatter only: time dial input (not in add row)
-    if (state.mode === "scatter") {
+    // density: measurement time dial
+    if (state.mode === "density") {
       metaLines.push(
         el("div", { class: "metaLine" }, [
-          el("span", { class: "label", text: "시각" }),
+          el("span", { class: "label", text: "측정시간" }),
           el("input", {
             class: "timeInput",
             type: "time",
@@ -2006,7 +1993,7 @@ function renderJobWork() {
               try {
                 await updateSampleFields(s.id, { start_time: v });
                 s.start_time = v;
-                setFoot("시각이 저장되었습니다.");
+                setFoot("측정시간이 저장되었습니다.");
               } catch (e) {
                 console.error(e);
                 setFoot(`저장 실패: ${e?.message || e}`);
@@ -2016,6 +2003,13 @@ function renderJobWork() {
         ])
       );
     }
+
+    // date label
+    metaLines.push(
+      el("div", { class: "metaLine" }, [
+        el("span", { class: "label", text: ymdDots(s.measurement_date) }),
+      ])
+    );
 
     const left = el("div", { class: "sampleLeft" }, [
       titleNode,
