@@ -151,6 +151,8 @@ select{
   cursor:pointer;
 }
 .btn.primary{ background:var(--pri); color:var(--priText); border-color:var(--pri); }
+.btn.addSampleBtn{ min-height:44px; display:flex; align-items:center; justify-content:center; }
+.addRow{ align-items:stretch; }
 .btn.ghost{ background:transparent; }
 .btn.small{ padding:7px 8px; font-size:13px; }
 .btn.block{ width:100%; }
@@ -167,14 +169,9 @@ select{
   cursor:pointer;
   font-size:13px;
 }
-.tabX{
-  margin-left:8px;
-  font-weight:900;
-  color:#666;
-  cursor:pointer;
-  user-select:none;
-}
 .tab.active{ background:#fff; color:#111; border-color:#111; font-weight:800; }
+.tabX{ margin-left:6px; font-weight:900; opacity:.5; cursor:pointer; }
+.tabX:active{ opacity:.8; }
 
 .list{ display:flex; flex-direction:column; gap:8px; }
 .item{
@@ -240,7 +237,14 @@ select{
 }
 .dateControls .dateCol{ flex:1 1 auto; min-width:0; }
 .dateControls .dateInput{
-  width:140px;
+  width:150px;
+  padding:8px 10px;
+  font-size:13px;
+  border-radius:10px;
+}
+.dateInput{
+  width:150px;
+  max-width:160px;
   padding:8px 10px;
   font-size:13px;
   border-radius:10px;
@@ -263,9 +267,8 @@ select{
 }
 
 .sampleLeft{ min-width:220px; flex:1; }
-.sampleTitle{ font-weight:900; font-size:14px; line-height:1.2; }
-.sampleTitleLine{ display:flex; align-items:center; gap:10px; }
-.sampleLocEdit{ flex:1 1 auto; min-width:0; padding:10px 12px; font-size:15px; border-radius:12px; }
+.sampleTitle{ font-weight:900; font-size:14px; line-height:1.2; display:flex; align-items:center; gap:8px; }
+.sampleLocEdit{ flex:1 1 auto; min-width:120px; padding:8px 10px; border:1px solid var(--line); border-radius:10px; font-size:13px; background:#fff; }
 .sampleMeta{
   margin-top:6px;
   display:flex;
@@ -452,7 +455,7 @@ select{
 .choiceSub{ display:none !important; }
 
 /* ===== Swipe to delete ===== */
-.swipeRow{ position:relative; overflow:hidden; border-radius:12px; }
+.swipeRow{ position:relative; overflow:hidden; border-radius:12px; background:#fff; }
 .swipeActions{
   position:absolute;
   inset:0;
@@ -460,6 +463,7 @@ select{
   justify-content:flex-end;
   align-items:stretch;
   z-index:0;
+  background:#fff;
 }
 .swipeDeleteBtn{
   width:92px;
@@ -490,6 +494,7 @@ select{
 @media (max-width: 520px){
   .root{ padding:0 12px 14px; }
   .topbar{ padding:12px 12px 8px; }
+  .dateInput{ width:140px; max-width:140px; }
 
   .sampleLeft{ min-width:0; }
   .timeInput{ width:108px; }
@@ -510,7 +515,6 @@ select{
   /* 날짜 컨트롤: 한 줄 고정 */
   .dateControls{ flex-wrap:nowrap !important; }
   .dateControls .dateCol{ flex-basis:auto !important; }
-  .dateControls .dateInput{ width:120px; padding:6px 8px; font-size:12px; }
   .dateControls > .btn{ width:auto !important; }
 
   /* 뷰어 버튼 */
@@ -523,13 +527,4 @@ select{
 
 @media (max-width: 420px){
   .choiceGrid{ grid-template-columns:1fr; }
-}
-
-
-/* 날짜 선택 후 체크(등록) 버튼 */
-.dateApplyBtn{
-  width:38px;
-  display:flex;
-  align-items:center;
-  justify-content:center;
 }
