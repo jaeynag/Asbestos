@@ -26,11 +26,11 @@ body{
 }
 
 .app{
-  max-width:820px;
-  margin:0 auto;
+  height:100dvh;
   min-height:100vh;
   display:flex;
   flex-direction:column;
+  overflow:hidden;
 }
 
 /* ===== Top bar ===== */
@@ -109,8 +109,19 @@ body{
 .menuItem.danger{ color:var(--danger); }
 .menuSep{ height:1px; background:var(--line); }
 
+/* ===== Global sizing / scroll fix ===== */
+html, body { height:100%; margin:0; padding:0; }
+body { overflow:hidden; }
+*, *::before, *::after { box-sizing:border-box; }
+
 /* ===== Page layout ===== */
-.root{ padding:0 16px 16px; flex:1; }
+.root{ 
+  padding:0 16px 16px;
+  padding-bottom:calc(16px + env(safe-area-inset-botoom));
+  flex:1;
+  overflow:auto;
+  -webkit-ovverflow-scrolling:touch;
+}
 .footer{ display:none; }
 .footStatus{ display:none; min-height:0; }
 
