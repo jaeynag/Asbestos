@@ -313,8 +313,12 @@ function createSwipeRow(contentInner, onDelete) {
     content.addEventListener('pointerdown', (ev) => {
       if (ev.pointerType === 'mouse' && ev.button !== 0) return;
       onDown(ev.clientX, ev.clientY);
-      try { content.setPointerCapture(ev.pointerId); } catch {}
+
+      if (ev.pointerType === 'mouse') {
+        try { content.setPointerCapture(ev.pinterId); } catch {}
+      }
     });
+  }
     content.addEventListener('pointermove', (ev) => onMove(ev.clientX, ev.clientY, ev));
     content.addEventListener('pointerup', onUp);
     content.addEventListener('pointercancel', onUp);
