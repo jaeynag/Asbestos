@@ -1411,6 +1411,21 @@ async function deleteJobAndRelated(job) {
 /** =========================
  *  Loaders
  *  ========================= */
+async function syncAuthFromSession(sess) {
+  // iOS 홈화면(PWA)/일부 WebView에서 세션은 보이는데 요청에 토큰이 안 붙는 케이스 보정
+  if (!sess?.access_token || !sess?.refresh_token) return;
+  try {
+    await supabase.auth.setSession({
+      access_token: sess.access_token,
+      refresh_token: sess.refresh_token,
+    });
+    // 내부 상태가 늦게 반영되는 케이스가 있어 1회 더 읽어 동기화
+    await supabase.auth.getSession();
+  } catch (e) {
+    console.warn('setSession sync failed:', e);
+  }
+}
+
 async function loadSession() {
   // 일부 환경(iOS 홈화면/PC WebView)에서 getSession으로는 user가 보이는데,
   // 내부 클라이언트에 access token 이 붙지 않아 RLS가 전부 비는 케이스가 있어 setSession으로 강제 동기화한다.
@@ -1418,16 +1433,7 @@ async function loadSession() {
   const sess = data?.session || null;
   state.user = sess?.user || null;
 
-  if (sess?.access_token && sess?.refresh_token) {
-    try {
-      await supabase.auth.setSession({
-        access_token: sess.access_token,
-        refresh_token: sess.refresh_token,
-      });
-    } catch (e) {
-      console.warn('setSession sync failed:', e);
-    }
-  }
+  await syncAuthFromSession(sess);
 
   if (state.user) {
     setFoot('로그인되었습니다.');
@@ -1443,12 +1449,32 @@ async function loadCompanies() {
 async function loadJobs() {
   if (!state.company || !state.mode) return;
   setFoot("현장 목록을 불러오는 중입니다...");
-  // iOS 홈화면(PWA)/일부 WebView에서 로그인 직후 토큰이 클라이언트에 제대로 안 붙어
-  // RLS 쿼리가 빈값으로 나오는 케이스가 있어서, 현장 조회 직전에 세션을 한번 더 동기화한다.
-  // loadSession()은 UI 상태를 크게 건드리지 않고(state.user 동기화 + setSession) 부작용이 적다.
-  await loadSession().catch(() => null);
-  state.jobs = await fetchJobs(state.company.id, state.mode);
-  setFoot("준비되었습니다.");
+  try {
+    // 현장 조회 직전에 토큰을 강제로 동기화(첫 로그인 직후/홈화면 PWA 타이밍 이슈)
+    const { data } = await supabase.auth.getSession();
+    await syncAuthFromSession(data?.session || null);
+
+    let jobs = await fetchJobs(state.company.id, state.mode);
+
+    // 첫 호출이 빈값으로 떨어지는 케이스가 있어 1회만 재시도
+    if (state.user && Array.isArray(jobs) && jobs.length === 0) {
+      try {
+        await supabase.auth.refreshSession();
+        const { data: d2 } = await supabase.auth.getSession();
+        await syncAuthFromSession(d2?.session || null);
+        jobs = await fetchJobs(state.company.id, state.mode);
+      } catch {
+        // ignore retry failure
+      }
+    }
+
+    state.jobs = jobs || [];
+    setFoot("준비되었습니다.");
+  } catch (e) {
+    console.error(e);
+    state.jobs = [];
+    setFoot(`현장 목록 불러오기에 실패했습니다: ${e?.message || e}`);
+  }
 }
 
 async function loadJob(job) {
@@ -2082,39 +2108,29 @@ function renderJobWork() {
 
     try { window.__APP_BOOTED = true; } catch {}
 
-    // auth state change
-    supabase.auth.onAuthStateChange(async (_event, session) => {
-        if (__authStateHandling) return;
-        __authStateHandling = true;
-        try {
-          state.user = session?.user || null;
+    
+// auth state change
+supabase.auth.onAuthStateChange(async (_event, session) => {
+  if (__authStateHandling) return;
+  __authStateHandling = true;
+  try {
+    await syncAuthFromSession(session || null);
 
-          if (session?.access_token && session?.refresh_token) {
-            try {
-              await supabase.auth.setSession({
-                access_token: session.access_token,
-                refresh_token: session.refresh_token,
-              });
-          } catch (e) {
-            console.warn('setSession sync failed:', e);
-          }
-        }
-        if (state.user) {
-          await loadCompanies().catch(() => null);
-        } else {
-          state.company = null;
-          state.mode = null;
-          state.job = null;
-          state.jobs = [];
-          state.companies = [];
-        }
-        render();
-      } finally {
-        __authStateHandling = false;
-      }
-    });
-
-    // initial companies if logged in
+    state.user = session?.user || null;
+    if (state.user) {
+      await loadCompanies().catch(() => null);
+    } else {
+      state.company = null;
+      state.mode = null;
+      state.job = null;
+      state.jobs = [];
+      state.companies = [];
+    }
+    render();
+  } finally {
+    __authStateHandling = false;
+  }
+});    // initial companies if logged in
     if (state.user && !state.companies.length) {
       await loadCompanies();
       render();
