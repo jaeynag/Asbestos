@@ -1427,6 +1427,10 @@ async function loadSession() {
     } catch (e) {
       console.warn('setSession sync failed:', e);
     }
+  
+
+    // force auth state sync (PWA/WebView race)
+    try { await supabase.auth.getSession(); } catch {}
   }
 
   if (state.user) {
@@ -2094,9 +2098,19 @@ function renderJobWork() {
           } catch (e) {
             console.warn('setSession sync failed:', e);
           }
-        }
+        
+
+    // force auth state sync (PWA/WebView race)
+    try { await supabase.auth.getSession(); } catch {}
+  }
         if (state.user) {
           await loadCompanies().catch(() => null);
+
+          // retry once if first load hit auth timing issue (first login / PWA)
+          if (!state.companies.length) {
+            await new Promise((r) => setTimeout(r, 150));
+            await loadCompanies().catch(() => null);
+          }
         } else {
           state.company = null;
           state.mode = null
