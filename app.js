@@ -2085,20 +2085,30 @@ function renderJobWork() {
         try {
           state.user = session?.user || null;
 
-          if (state.user) {
-            await loadCompanies().catch(() => null);
-          } else {
-            state.company = null;
-            state.mode = null;
-            state.job = null;
-            state.jobs = [];
-            state.companies = [];
+          if (session?.access_token && session?.refresh_token) {
+            try {
+              await supabase.auth.setSession({
+                access_token: session.access_token,
+                refresh_token: session.refresh_token,
+              });
+          } catch (e) {
+            console.warm('setSession sync failed:', e);
           }
-      render();
-    } finally {
-      __authStateHandling = false;
-    }
-  });
+        }
+        if (state.user) {
+          await loadCompanies().catch(() => null);
+        } else {
+          state.company = null;
+          state.mode = null
+          state.job = null;
+          state.jobs = [];
+          state.companies = [];
+        }
+        render();
+      } finally {
+        __authStateHandling = false;
+      }
+    });
 
     // initial companies if logged in
     if (state.user && !state.companies.length) {
