@@ -114,6 +114,7 @@ body{
 .footer{
   padding:10px 16px 16px;
   padding-bottom:calc(16px + env(safe-area-inset-bottom));
+  display:none !important;
 }
 .footStatus{ font-size:12px; color:var(--muted); min-height:16px; }
 
@@ -151,6 +152,7 @@ select{
   cursor:pointer;
 }
 .btn.primary{ background:var(--pri); color:var(--priText); border-color:var(--pri); }
+.btn.addSampleBtn{ padding:12px; border-radius:12px; min-height:44px; display:flex; align-items:center; justify-content:center; }
 .btn.ghost{ background:transparent; }
 .btn.small{ padding:7px 8px; font-size:13px; }
 .btn.block{ width:100%; }
@@ -158,11 +160,7 @@ select{
 .btn.danger{ border-color:var(--danger); color:var(--danger); background:#fff; }
 
 /* ===== Tabs & list ===== */
-.tabs{ display:flex; gap:6px; flex-wrap:wrap; }
-.tabs .tab{
-  padding:6px 8px;
-  font-size:12px;
-}
+.tabs{ display:flex; gap:8px; flex-wrap:wrap; }
 .tab{
   padding:8px 10px;
   border-radius:999px;
@@ -172,6 +170,10 @@ select{
   font-size:13px;
 }
 .tab.active{ background:#fff; color:#111; border-color:#111; font-weight:800; }
+.tab{ display:flex; align-items:center; gap:8px; }
+.tabX{ font-size:14px; line-height:1; opacity:.55; padding:0 2px; }
+.tabX:active{ opacity:.9; }
+
 
 .list{ display:flex; flex-direction:column; gap:8px; }
 .item{
@@ -244,20 +246,6 @@ select{
 }
 .dateControls > .btn{ flex:0 0 auto; width:auto; white-space:nowrap; }
 
-/* app.js에서 쓰는 dateInput/dateBtn (모바일에서 삐져나감 방지) */
-.dateInput{
-  width:140px;
-  padding:8px 10px;
-  font-size:13px;
-  border-radius:10px;
-}
-.dateBtn{
-  padding:8px 10px;
-  font-size:13px;
-  border-radius:10px;
-  white-space:nowrap;
-}
-
 /* ===== Sample row ===== */
 .xBtn{
   position:absolute;
@@ -286,15 +274,14 @@ select{
   justify-content:space-between;
   gap:10px;
   padding:10px 12px;
-  padding-left:44px; /* X 자리 */
   border:1px solid var(--line);
   border-radius:12px;
   background:#fff;
   overflow:hidden;
 }
 
-.sampleLeft{ min-width:220px; flex:1; display:flex; flex-direction:column; align-items:flex-end; text-align:right; }
-.sampleTitle{ font-weight:900; font-size:14px; line-height:1.2; display:flex; justify-content:flex-end; gap:6px; }
+.sampleLeft{ min-width:220px; flex:1; }
+.sampleTitle{ font-weight:900; font-size:14px; line-height:1.2; }
 .sampleMeta{
   margin-top:6px;
   display:flex;
@@ -303,15 +290,7 @@ select{
   font-size:12px;
   color:var(--muted);
 }
-.sampleMeta{ align-items:flex-end; }
-.metaLine{ display:flex; align-items:center; justify-content:flex-end; gap:10px; flex-wrap:wrap; }
-
-.btn.addSampleBtn{
-  min-height:44px;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-}
+.metaLine{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 
 .timeInput{
   width:120px;
@@ -489,8 +468,10 @@ select{
 .choiceSub{ display:none !important; }
 
 /* ===== Swipe to delete ===== */
-.swipeRow{ position:relative; overflow:hidden; border-radius:12px; }
+.swipeRow{ position:relative; overflow:hidden; border-radius:12px; background:#fff; }
+/* swipe hairline fix */
 .swipeActions{
+  background:#fff;
   position:absolute;
   inset:0;
   display:flex;
@@ -519,6 +500,18 @@ select{
 .swipeRow.dragging .swipeContent{ transition:none !important; }
 
 .sectionLabel{ display:block; margin-bottom:10px; }
+
+
+.sampleTitle{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.sampleTitlePrefix{ white-space:nowrap; }
+.sampleLocEdit{
+  border:1px solid var(--line);
+  border-radius:10px;
+  padding:8px 10px;
+  font-size:14px;
+  min-width:140px;
+  flex:1 1 140px;
+}
 
 /* ===== Utilities ===== */
 [hidden]{ display:none !important; }
