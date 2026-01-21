@@ -27,6 +27,7 @@ body{
 
 .app{
   min-height:100dvh;
+  height:100vh;
   height:100dvh;
   overflow:hidden;
   display:flex;
@@ -119,9 +120,8 @@ body { overflow:hidden; }
   padding:0 16px 16px;
   padding-bottom:calc(96px + env(safe-area-inset-botoom));
   flex:1;
-
   min-height:0;
-  overflow-yauto;
+  overflow-y:auto;
   -webkit-overflow-scrolling:touch;
 }
 .footer{ display:none; }
