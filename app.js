@@ -432,6 +432,7 @@ const state = {
 
   dates: [],
   activeDate: null,
+  pendingDate: null,
   samplesByDate: new Map(),
 
   authTab: "login", // login|signup
@@ -1796,58 +1797,87 @@ function renderJobSelect() {
 function renderJobWork() {
   const job = state.job;
 
+  function deleteDateTab(dateISO) {
+    const v = iso10(dateISO);
+    const arr = state.samplesByDate.get(v) || [];
+    if (arr.length) {
+      alert("해당 날짜에 시료가 있어 삭제할 수 없습니다.");
+      return;
+    }
+
+    state.dates = state.dates.filter((d) => iso10(d) !== v);
+    state.samplesByDate.delete(v);
+
+    if (!state.dates.length) {
+      const today = iso10(new Date());
+      state.dates = [today];
+      state.samplesByDate.set(today, []);
+      state.activeDate = today;
+    } else {
+      const next = state.dates.includes(state.activeDate) ? state.activeDate : state.dates[0];
+      state.activeDate = next;
+    }
+    state.addOpen = false;
+    render();
+  }
+
   // date tabs
   const tabs = el("div", { class: "tabs", style: "margin:10px 0;" });
   for (const d of state.dates) {
-    tabs.appendChild(
-      el("button", {
+    const btn = el(
+      "button",
+      {
         class: "tab" + (state.activeDate === d ? " active" : ""),
-        text: ymdDots(d),
         onclick: () => {
           state.activeDate = d;
+          state.pendingDate = null;
           state.addOpen = false;
           render();
         },
-      })
+      },
+      [
+        el("span", { text: ymdDots(d) }),
+        el("span", {
+          class: "tabX",
+          text: "×",
+          onclick: (ev) => {
+            ev.stopPropagation();
+            deleteDateTab(d);
+          },
+        }),
+      ]
     );
+    tabs.appendChild(btn);
   }
 
-    // date picker: 날짜 선택 후 달력 '체크(완료)'로 닫힐 때(blur) 적용
-  if (typeof state.dateDraft !== "string" || !state.dateDraft) state.dateDraft = iso10(state.activeDate);
-  if (typeof state.datePending !== "boolean") state.datePending = false;
-
-  const applyDraftDate = (v) => {
-    const d = iso10(v || state.activeDate);
-    if (!state.dates.includes(d)) {
-      state.dates.push(d);
-      state.dates.sort();
-      state.samplesByDate.set(d, []);
-    }
-    state.activeDate = d;
-    state.addOpen = false;
-    state.datePending = false;
-    state.dateDraft = d;
-    render();
-  };
-
-  const datePick = el("input", {
+  const dateAdd = el("input", {
     class: "input dateInput",
     type: "date",
-    value: iso10(state.dateDraft || state.activeDate),
+    value: iso10(state.pendingDate || state.activeDate),
     oninput: (ev) => {
-      state.dateDraft = iso10(ev.target.value || state.activeDate);
-      state.datePending = true;
-    },
-    onchange: (ev) => {
-      state.dateDraft = iso10(ev.target.value || state.activeDate);
-      state.datePending = true;
-    },
-    onblur: () => {
-      if (state.datePending) applyDraftDate(state.dateDraft);
+      state.pendingDate = iso10(ev.target.value);
     },
   });
 
+  const dateApply = el("button", {
+    class: "btn primary small dateApplyBtn",
+    text: "✓",
+    title: "날짜 등록",
+    onclick: () => {
+      const v = iso10(state.pendingDate || dateAdd.value);
+      if (!v) return;
 
+      if (!state.dates.includes(v)) {
+        state.dates.push(v);
+        state.dates.sort();
+        state.samplesByDate.set(v, []);
+      }
+      state.activeDate = v;
+      state.pendingDate = null;
+      state.addOpen = false;
+      render();
+    },
+  });
 
   // add sample
   const SCATTER_LOCATIONS = [
@@ -1860,7 +1890,7 @@ function renderJobWork() {
     "폐기물 보관지점",
   ];
 
-  let locInput;
+  let locInput = null;
   if (state.mode === "scatter") {
     const sel = el("select", {
       class: "input",
@@ -1873,25 +1903,14 @@ function renderJobWork() {
     }
     sel.value = state.addLoc && SCATTER_LOCATIONS.includes(state.addLoc) ? state.addLoc : SCATTER_LOCATIONS[0];
     locInput = sel;
-  } else {
-    const inp = el("input", {
-      class: "input",
-      placeholder: "시료 위치(예: 거실, 주방...)",
-      oninput: (ev) => {
-        state.addLoc = ev.target.value;
-      },
-    });
-    inp.value = state.addLoc || "";
-    locInput = inp;
   }
-  const timeInput = el("input", { class: "timeInput", placeholder: "시각(선택)", value: state.addTime || "" });
 
   const addSampleBtn = el("button", {
-    class: "btn primary",
+    class: state.mode === "density" ? "btn primary block addSampleBtn" : "btn primary addSampleBtn",
     text: "시료 추가",
     onclick: async () => {
       try {
-        const loc = safeText(locInput.value);
+        const loc = state.mode === "scatter" ? safeText(locInput?.value) : "";
         const dateISO = state.activeDate || new Date().toISOString().slice(0, 10);
 
         setFoot("시료를 생성 중입니다...");
@@ -1899,13 +1918,6 @@ function renderJobWork() {
 
         // reload to get correct p_index & date lists
         await loadJob(job);
-
-        // time optional
-        const t = safeText(timeInput.value);
-        if (t) {
-          await updateSampleFields(newRow.id || newRow?.[0]?.id, { start_time: t });
-          await loadJob(job);
-        }
 
         setFoot("시료가 추가되었습니다.");
       } catch (e) {
@@ -1922,22 +1934,17 @@ function renderJobWork() {
         el("div", { class: "item-title", text: safeText(job.project_name, "(현장)") }),
         el("div", { class: "item-sub", text: [modeLabel(state.mode), safeText(job.address)].filter(Boolean).join(" · ") }),
       ]),
-      el("div", { class: "row", style: "gap:8px;" }, [
-        datePick,
-      ]),
+      el("div", { class: "dateControls" }, [dateAdd, dateApply]),
     ]),
     tabs,
-    el("div", { class: "row", style: "margin-top:10px;" }, [
-      el("div", { class: "col", style: "flex:1; min-width:240px;" }, [
-        el("div", { class: "label", text: `시료 추가 · ${ymdDots(state.activeDate)}` }),
-        locInput,
-      ]),
-      el("div", { class: "col" }, [
-        el("div", { class: "label", text: "시각(선택)" }),
-        timeInput,
-      ]),
-      el("div", { class: "col", style: "justify-content:flex-end;" }, [addSampleBtn]),
-    ]),
+    (state.mode === "scatter"
+      ? el("div", { class: "row addRow", style: "margin-top:10px; align-items:stretch;" }, [
+          el("div", { class: "col", style: "flex:1; min-width:0;" }, [locInput]),
+          el("div", { class: "col", style: "justify-content:flex-end;" }, [addSampleBtn]),
+        ])
+      : el("div", { class: "row", style: "margin-top:10px;" }, [
+          el("div", { class: "col", style: "flex:1;" }, [addSampleBtn]),
+        ])),
   ]);
 
   root.appendChild(head);
@@ -1953,31 +1960,56 @@ function renderJobWork() {
 
   for (const s of samples) {
   
+    const titleNode = (state.mode === "density")
+      ? el("div", { class: "sampleTitle sampleTitleLine" }, [
+          el("span", { text: `P${s.p_index || "?"}.` }),
+          el("input", {
+            class: "input sampleLocEdit",
+            value: safeText(s.sample_location),
+            placeholder: "미입력",
+            onblur: async (ev) => {
+              const v = safeText(ev.target.value);
+              if (v === safeText(s.sample_location)) return;
+              try {
+                await updateSampleFields(s.id, { sample_location: v });
+                s.sample_location = v;
+                setFoot("시료위치가 저장되었습니다.");
+              } catch (e) {
+                console.error(e);
+                setFoot(`저장 실패: ${e?.message || e}`);
+              }
+            },
+          }),
+        ])
+      : el("div", { class: "sampleTitle", text: `P${s.p_index || "?"} · ${safeText(s.sample_location, "미입력")}` });
+
     const left = el("div", { class: "sampleLeft" }, [
-      el("div", { class: "sampleTitle", text: `P${s.p_index || "?"} · ${safeText(s.sample_location, "미입력")}` }),
+      titleNode,
       el("div", { class: "sampleMeta" }, [
         el("div", { class: "metaLine" }, [
-          el("span", { class: "label", text: ymdDots(s.measurement_date) }),
-        ]),
-        el("div", { class: "metaLine" }, [
-          el("span", { class: "label", text: "시각" }),
+          el("span", { class: "label", text: "측정시간" }),
           el("input", {
-            class: "timeInput",
+            class: "timeInput sampleTimeInput",
+            type: "time",
+            step: "60",
             value: safeText(s.start_time),
-            placeholder: "예: 10:30",
             onblur: async (ev) => {
               const v = safeText(ev.target.value);
               if (v === safeText(s.start_time)) return;
               try {
                 await updateSampleFields(s.id, { start_time: v });
                 s.start_time = v;
-                setFoot("시각이 저장되었습니다.");
+                setFoot("측정시간이 저장되었습니다.");
               } catch (e) {
                 console.error(e);
                 setFoot(`저장 실패: ${e?.message || e}`);
               }
             },
-          }),        ]),
+          }),
+        ]),
+        el("div", { class: "metaLine" }, [
+          el("span", { class: "label", text: ymdDots(s.measurement_date) }),
+        ]),
       ]),
     ]);
 
