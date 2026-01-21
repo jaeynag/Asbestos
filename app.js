@@ -1443,37 +1443,11 @@ async function loadCompanies() {
 async function loadJobs() {
   if (!state.company || !state.mode) return;
   setFoot("현장 목록을 불러오는 중입니다...");
-
-  // iOS 홈화면(PWA)/일부 WebView에서 첫 로그인 직후 토큰이 내부 클라이언트에 늦게 붙어
-  // RLS 쿼리가 빈 값으로 오는 케이스가 있어, 현장 로드 직전에 세션을 한 번 더 동기화 + 1회 재시도한다.
-  try {
-    const { data } = await supabase.auth.getSession();
-    const sess = data?.session || null;
-    if (sess?.access_token && sess?.refresh_token) {
-      await supabase.auth.setSession({
-        access_token: sess.access_token,
-        refresh_token: sess.refresh_token,
-      });
-      // 내부 상태 갱신(일부 환경에서 필요)
-      await supabase.auth.getSession();
-    }
-  } catch (e) {
-    console.warn("auth sync before loadJobs failed:", e);
-  }
-
-  let jobs = await fetchJobs(state.company.id, state.mode);
-
-  // 첫 호출이 비면 짧게 대기 후 1회 재시도(새로고침 없이 현장 목록 복구)
-  if (!jobs || jobs.length === 0) {
-    try {
-      await new Promise((r) => setTimeout(r, 150));
-      jobs = await fetchJobs(state.company.id, state.mode);
-    } catch {
-      // ignore
-    }
-  }
-
-  state.jobs = jobs || [];
+  // iOS 홈화면(PWA)/일부 WebView에서 로그인 직후 토큰이 클라이언트에 제대로 안 붙어
+  // RLS 쿼리가 빈값으로 나오는 케이스가 있어서, 현장 조회 직전에 세션을 한번 더 동기화한다.
+  // loadSession()은 UI 상태를 크게 건드리지 않고(state.user 동기화 + setSession) 부작용이 적다.
+  await loadSession().catch(() => null);
+  state.jobs = await fetchJobs(state.company.id, state.mode);
   setFoot("준비되었습니다.");
 }
 
@@ -2122,14 +2096,14 @@ function renderJobWork() {
                 refresh_token: session.refresh_token,
               });
           } catch (e) {
-            console.warm('setSession sync failed:', e);
+            console.warn('setSession sync failed:', e);
           }
         }
         if (state.user) {
           await loadCompanies().catch(() => null);
         } else {
           state.company = null;
-          state.mode = null
+          state.mode = null;
           state.job = null;
           state.jobs = [];
           state.companies = [];
