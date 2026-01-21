@@ -315,7 +315,7 @@ function createSwipeRow(contentInner, onDelete) {
       onDown(ev.clientX, ev.clientY);
 
       if (ev.pointerType === 'mouse') {
-        try { content.setPointerCapture(ev.pinterId); } catch {}
+        try { content.setPointerCapture(ev.pointerId); } catch {}
       }
     });
   }
