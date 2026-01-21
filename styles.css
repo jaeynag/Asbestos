@@ -26,11 +26,9 @@ body{
 }
 
 .app{
-  height:100dvh;
-  min-height:100vh;
+  min-height:100dvh;
   display:flex;
   flex-direction:column;
-  overflow:hidden;
 }
 
 /* ===== Top bar ===== */
@@ -117,10 +115,8 @@ body { overflow:hidden; }
 /* ===== Page layout ===== */
 .root{ 
   padding:0 16px 16px;
-  padding-bottom:calc(16px + env(safe-area-inset-botoom));
+  padding-bottom:calc(80px + env(safe-area-inset-botoom));
   flex:1;
-  overflow:auto;
-  -webkit-ovverflow-scrolling:touch;
 }
 .footer{ display:none; }
 .footStatus{ display:none; min-height:0; }
