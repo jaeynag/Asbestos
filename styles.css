@@ -152,6 +152,7 @@ select{
   cursor:pointer;
 }
 .btn.primary{ background:var(--pri); color:var(--priText); border-color:var(--pri); }
+.btn.addSampleBtn{ padding:12px; border-radius:12px; min-height:44px; display:flex; align-items:center; justify-content:center; }
 .btn.ghost{ background:transparent; }
 .btn.small{ padding:7px 8px; font-size:13px; }
 .btn.block{ width:100%; }
