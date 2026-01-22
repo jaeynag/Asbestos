@@ -1953,11 +1953,11 @@ function renderJobWork() {
       el("div", { class: "row", style: "gap:8px; align-items:flex-end;" }, [datePick]),
     ]),
     tabs,
-
      el("div", { class: "row", style: "margin-top:10px;" }, [
        el("div", { class: "col", style: "flex:1; min-width:240px;" }, [addSampleBtn]),
      ]),
   ]);
+  root.appendchild(head);
 
   // ===== Samples list =====
   const dateISO = state.activeDate;
