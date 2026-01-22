@@ -2150,6 +2150,15 @@ function renderJobWork() {
         await initSupabase();
         await loadSession();
 
+        if (state.user) {
+          // 1. 현장 목록 화면에 있었다면 목록 갱신
+          if (state.company && state.mode && !state.job) {
+             await loadJobs();
+          }
+          // 2. 특정 현장 작업 화면에 있었다면 해당 현장 데이터 갱신
+          else if (state.job) {
+             await loadJob(state.job);
+
         render();
       } catch (e) {
         console.warn("resume cleanup failed:", e);
