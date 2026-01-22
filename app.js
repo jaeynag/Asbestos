@@ -2135,7 +2135,7 @@ function renderJobWork() {
     render();
 
     // ===== iOS 홈화면(PWA) 백그라운드 복귀 시 터치/키 씹힘 방어 =====
-    function onAppResume() {
+    async function onAppResume() {
       try {
         // 떠있는 오버레이/메뉴가 터치 막는 케이스 방지
         closeSettings();
