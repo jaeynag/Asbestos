@@ -488,10 +488,24 @@ const viewerZoom = document.getElementById("viewerZoom");
  *  Header / menu
  *  ========================= */
 function closeSettings() {
-  if ($id("settingsMenu")) $id("settingsMenu").hidden = true;
+  const m = $id("settingsMenu");
+  if (!m) return;
+  m.hidden = true;
+  m.style.display = "none";       // ✅ 진짜로 화면에서 제거
+  m.style.pointerEvents = "none"; // ✅ 터치/클릭 차단
 }
 function toggleSettings() {
-  if ($id("settingsMenu")) $id("settingsMenu").hidden = !$id("settingsMenu").hidden;
+  const m = $id("settingsMenu");
+  if (!m) return;
+
+  const isClosed = m.hidden || m.style.display === "none";
+  if (isClosed) {
+    m.hidden = false;
+    m.style.display = "";         // ✅ CSS 기본값으로 복원
+    m.style.pointerEvents = "auto";
+  } else {
+    closeSettings();
+  }
 }
 
 document.addEventListener("click", (ev) => {
