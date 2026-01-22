@@ -2147,6 +2147,9 @@ function renderJobWork() {
         // 헤더 메뉴 중복 방지 타이머도 리셋(복귀 직후 클릭 씹힘 방지)
         __lastHeaderAction = { id: "", t: 0 };
 
+        await initSupabase();
+        await loadSssion();
+
         render();
       } catch (e) {
         console.warn("resume cleanup failed:", e);
