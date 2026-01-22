@@ -2192,13 +2192,3 @@ function renderJobWork() {
     try { window.__APP_BOOTED = false; } catch {}
   }
 })();
-
-
-    // initial jobs if already have selection in memory (future)
-  } catch (e) {
-    console.error(e);
-    setFoot(`초기화 실패: ${e?.message || e}`);
-    render();
-    try { window.__APP_BOOTED = false; } catch {}
-  }
-})();
