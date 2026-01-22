@@ -1834,7 +1834,7 @@ function renderJobWork() {
   function deleteEmptyDate(dateISO) {
     const bucket = state.samplesByDate.get(dateISO) || [];
     if (bucket.length) {
-      alert("이 날짜에는 시료가 있어서 삭제할 수 없습니다. (시료를 먼저 삭제해줘)");
+      alert("이 날짜에는 시료가 있어서 삭제할 수 없습니다. (시료를 먼저 삭제해주세요)");
       return;
     }
     state.samplesByDate.delete(dateISO);
