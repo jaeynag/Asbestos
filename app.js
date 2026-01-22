@@ -1922,28 +1922,13 @@ function renderJobWork() {
     "폐기물 보관지점",
   ];
 
-  let locInput = null;
-  if (state.mode === "scatter") {
-    const sel = el("select", {
-      class: "input",
-      onchange: (ev) => {
-        state.addLoc = ev.target.value;
-      },
-    });
-    for (const name of SCATTER_LOCATIONS) {
-      sel.appendChild(el("option", { value: name, text: name }));
-    }
-    sel.value = state.addLoc && SCATTER_LOCATIONS.includes(state.addLoc) ? state.addLoc : SCATTER_LOCATIONS[0];
-    locInput = sel;
-  }
-
   const addSampleBtn = el("button", {
     class: state.mode === "density" ? "btn primary block" : "btn primary addSampleBtn",
     text: "시료 추가",
     onclick: async () => {
       try {
         const dateISO = state.activeDate || new Date().toISOString().slice(0, 10);
-        const loc = state.mode === "scatter" ? safeText(locInput?.value) : ""; // 농도는 등록칸에서 위치 입력 안 함
+        const loc =  "";
 
         setFoot("시료를 생성 중입니다...");
         await createSample(job.id, dateISO, loc);
@@ -1968,17 +1953,11 @@ function renderJobWork() {
       el("div", { class: "row", style: "gap:8px; align-items:flex-end;" }, [datePick]),
     ]),
     tabs,
-    state.mode === "scatter"
-      ? el("div", { class: "row addRow", style: "margin-top:10px;" }, [
-          el("div", { class: "col", style: "flex:1; min-width:240px;" }, [locInput]),
-          el("div", { class: "col", style: "justify-content:flex-end;" }, [addSampleBtn]),
-        ])
-      : el("div", { class: "row", style: "margin-top:10px;" }, [
-          el("div", { class: "col", style: "flex:1; min-width:240px;" }, [addSampleBtn]),
-        ]),
-  ]);
 
-  root.appendChild(head);
+     el("div", { class: "row", style: "margin-top:10px;" }, [
+       el("div", { class: "col", style: "flex:1; min-width:240px;" }, [addSampleBtn]),
+     ]),
+  ]);
 
   // ===== Samples list =====
   const dateISO = state.activeDate;
@@ -2014,9 +1993,41 @@ function renderJobWork() {
         el("span", { text: `P${s.p_index || "?"}.` }),
         inp,
       ]);
+
     } else {
-      titleNode = el("div", { class: "sampleTitle", text: `P${s.p_index || "?"} · ${safeText(s.sample_location, "미입력")}` });
+      const sel = el("select", {
+        class: "input",
+        onchange: async (ev) => {
+          const v = safeText(ev.target.value);
+          if (v === safeText(s.sample_location)) return;
+          try {
+            await updateSampleFields(s.id, { sample_location: v });
+            s.sample_location = v;
+            setFoot("시료위치가 저장되었습니다.");
+          } catch (e) {
+            console.error(e);
+            setFoot(`저장 실패: ${e?.message || e}`);
+        // 실패 시 UI를 원래 값으로 되돌리고 싶으면 아래 한 줄 추가 가능(선택)
+        // ev.target.value = SCATTER_LOCATIONS.includes(s.sample_location) ? s.sample_location : "";
+          }
+        },
+      });
+
+  // 첫 옵션: 아직 미선택 상태를 보여주기 위한 placeholder
+      sel.appendChild(el("option", { value: "", text: "시료위치 선택" }));
+
+      for (const name of SCATTER_LOCATIONS) {
+        sel.appendChild(el("option", { value: name, text: name }));
+      }
+
+      sel.value = SCATTER_LOCATIONS.includes(s.sample_location) ? s.sample_location : "";
+
+      titleNode = el("div", { class: "sampleTitle" }, [
+        el("span", { text: `P${s.p_index || "?"}.` }),
+        sel,
+      ]);
     }
+
 
     // measurement time dial (both modes)
     const timeNode = el("input", {
