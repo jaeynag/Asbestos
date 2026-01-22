@@ -21,13 +21,19 @@
 // NOTE: iOS 홈화면(PWA)/일부 WebView에서 외부 ESM CDN 로드가 간헐적으로 실패하는 케이스가 있어
 // supabase-js는 동적 import로 로드합니다(로컬 파일 우선, 실패 시 CDN).
 async function loadSupabaseModule() {
-  const candidates = [
+  const cdn = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+  const candidates = (() => {
+    // GitHub Pages에 vendor 파일이 없으면 404가 콘솔에 계속 찍혀서 거슬림 → 거긴 CDN만 사용
+    const h = (typeof location !== "undefined" && location.hostname) ? location.hostname : "";
+    const isGithubPages = h.endsWith("github.io");
+    if (isGithubPages) return [cdn];
     // 로컬로 번들해두면 PWA 안정성이 확 올라감(추천)
-    "./vendor/supabase-js@2.esm.js",
-    "./vendor/supabase-js@2/+esm.js",
-    // 최후 fallback
-    "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm",
-  ];
+    return [
+      "./vendor/supabase-js@2.esm.js",
+      "./vendor/supabase-js@2/+esm.js",
+      cdn,
+    ];
+  })();
   let lastErr = null;
   for (const url of candidates) {
     try {
@@ -457,12 +463,7 @@ const state = {
  *  DOM refs
  *  ========================= */
 const root = document.getElementById("root");
-const btnBack = document.getElementById("btnBack");
-const btnGear = document.getElementById("btnGear");
-const settingsMenu = document.getElementById("settingsMenu");
-const menuChangeMode = document.getElementById("menuChangeMode");
-const menuChangeCompany = document.getElementById("menuChangeCompany");
-const menuSignOut = document.getElementById("menuSignOut");
+const $id = (id) => document.getElementById(id);
 
 // modal
 const modal = document.getElementById("modal");
@@ -487,27 +488,27 @@ const viewerZoom = document.getElementById("viewerZoom");
  *  Header / menu
  *  ========================= */
 function closeSettings() {
-  if (settingsMenu) settingsMenu.hidden = true;
+  if ($id("settingsMenu")) $id("settingsMenu").hidden = true;
 }
 function toggleSettings() {
-  if (settingsMenu) settingsMenu.hidden = !settingsMenu.hidden;
+  if ($id("settingsMenu")) $id("settingsMenu").hidden = !$id("settingsMenu").hidden;
 }
 
 document.addEventListener("click", (ev) => {
-  if (!settingsMenu || settingsMenu.hidden) return;
+  if (!$id("settingsMenu") || $id("settingsMenu").hidden) return;
   const t = ev.target;
-  if (t === btnGear || (btnGear && btnGear.contains(t))) return;
-  if (settingsMenu.contains(t)) return;
+  if (t === $id("btnGear") || ($id("btnGear") && $id("btnGear").contains(t))) return;
+  if ($id("settingsMenu").contains(t)) return;
   closeSettings();
 });
 
 function updateHeader() {
   const authed = !!state.user;
-  if (btnGear) btnGear.style.display = authed ? "" : "none";
-  if (btnBack) btnBack.style.display = authed && state.company ? "" : "none";
+  if ($id("btnGear")) $id("btnGear").style.display = authed ? "" : "none";
+  if ($id("btnBack")) $id("btnBack").style.display = authed && state.company ? "" : "none";
 
-  if (menuChangeMode) menuChangeMode.disabled = !state.mode;
-  if (menuChangeCompany) menuChangeCompany.disabled = !state.company;
+  if ($id("menuChangeMode")) $id("menuChangeMode").disabled = !state.mode;
+  if ($id("menuChangeCompany")) $id("menuChangeCompany").disabled = !state.company;
 }
 
 function goBack() {
@@ -548,48 +549,64 @@ function goBack() {
   }
 }
 
-btnBack?.addEventListener("click", goBack);
-btnGear?.addEventListener("click", toggleSettings);
+document.addEventListener("click", (ev) => {
+  const hit = ev.target?.closest?.("#btnBack, #btnGear, #menuChangeMode, #menuChangeCompany, #menuSignOut");
+  if (!hit) return;
 
-menuChangeMode?.addEventListener("click", () => {
-  if (!state.user) return;
-  closeSettings();
-  if (!state.mode) return;
-  if (!confirm("업무를 변경하시겠습니까?")) return;
-  cleanupAllThumbBlobs();
-  state.mode = null;
-  state.job = null;
-  state.addOpen = false;
-  render();
+  if (hit.id === "btnBack") {
+    goBack();
+    return;
+  }
+  if (hit.id === "btnGear") {
+    toggleSettings();
+    return;
+  }
+
+  if (hit.id === "menuChangeMode") {
+    if (!state.user) return;
+    closeSettings();
+    if (!state.mode) return;
+    if (!confirm("업무를 변경하시겠습니까?")) return;
+    cleanupAllThumbBlobs();
+    state.mode = null;
+    state.job = null;
+    state.addOpen = false;
+    render();
+    return;
+  }
+
+  if (hit.id === "menuChangeCompany") {
+    if (!state.user) return;
+    closeSettings();
+    if (!state.company) return;
+    if (!confirm("회사를 변경하시겠습니까?")) return;
+    cleanupAllThumbBlobs();
+    state.company = null;
+    state.mode = null;
+    state.job = null;
+    state.addOpen = false;
+    render();
+    return;
+  }
+
+  if (hit.id === "menuSignOut") {
+    if (!state.user) return;
+    (async () => {
+      try {
+        closeSettings();
+        cleanupAllThumbBlobs();
+        setFoot("로그아웃 중...");
+        await initSupabase();
+        // 로그아웃 요청만 보냄 -> onAuthStateChange가 감지해서 상태 초기화 + render 처리
+        await supabase.auth.signOut();
+      } catch (e) {
+        console.error(e);
+        setFoot(`로그아웃 실패: ${e?.message || e}`);
+      }
+    })();
+  }
 });
 
-menuChangeCompany?.addEventListener("click", () => {
-  if (!state.user) return;
-  closeSettings();
-  if (!state.company) return;
-  if (!confirm("회사를 변경하시겠습니까?")) return;
-  cleanupAllThumbBlobs();
-  state.company = null;
-  state.mode = null;
-  state.job = null;
-  state.addOpen = false;
-  render();
-});
-
-menuSignOut?.addEventListener("click", async () => {
-  if (!state.user) return;
-  closeSettings();
-  cleanupAllThumbBlobs();
-  await initSupabase();
-  await supabase.auth.signOut();
-  state.user = null;
-  state.company = null;
-  state.mode = null;
-  state.job = null;
-  state.addOpen = false;
-  setFoot("로그아웃되었습니다.");
-  render();
-});
 
 /** =========================
  *  Modal
@@ -1607,9 +1624,8 @@ function renderAuth() {
         // login
         const { error } = await supabase.auth.signInWithPassword({ email: e, password: p });
         if (error) throw error;
-        await loadSession();
-        await loadCompanies();
-        render();
+        setFoot("로그인 성공! 데이터를 불러오는 중...");
+        // 화면 갱신은 onAuthStateChange에서 처리
       } catch (err) {
         console.error(err);
         const m = err?.message || String(err);
