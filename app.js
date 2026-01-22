@@ -2158,10 +2158,14 @@ function renderJobWork() {
           // 2. 특정 현장 작업 화면에 있었다면 해당 현장 데이터 갱신
           else if (state.job) {
              await loadJob(state.job);
+          }
+        }
 
         render();
       } catch (e) {
-        console.warn("resume cleanup failed:", e);
+        console.warn("resume cleanup/fetch failed:", e);
+        setFoot("동기화 실패(네트워크 확인)");
+        render();
       }
     }
 
