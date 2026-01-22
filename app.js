@@ -319,7 +319,10 @@ function createSwipeRow(contentInner, onDelete) {
     content.addEventListener('pointerdown', (ev) => {
       if (ev.pointerType === 'mouse' && ev.button !== 0) return;
       onDown(ev.clientX, ev.clientY);
-      try { content.setPointerCapture(ev.pointerId); } catch {}
+
+      if (ev.pointerType === 'mouse' ) {
+        try { content.setPointerCapture(ev.pointerId); } catch {}
+      }
     });
     content.addEventListener('pointermove', (ev) => onMove(ev.clientX, ev.clientY, ev));
     content.addEventListener('pointerup', onUp);
@@ -2131,17 +2134,33 @@ function renderJobWork() {
     }
     render();
 
-    if (state.user) {
-      await loadCompanies();
+    // ===== iOS 홈화면(PWA) 백그라운드 복귀 시 터치/키 씹힘 방어 =====
+    function onAppResume() {
+      try {
+        // 떠있는 오버레이/메뉴가 터치 막는 케이스 방지
+        closeSettings();
+        if (typeof __openSwipeRow !== "undefined" && __openSwipeRow) closeSwipeRow(__openSwipeRow);
+
+        if (state.viewer && state.viewer.open) closeViewer();
+        if (modal && !modal.hidden) closeModal();
+
+        // 헤더 메뉴 중복 방지 타이머도 리셋(복귀 직후 클릭 씹힘 방지)
+        __lastHeaderAction = { id: "", t: 0 };
+
+        render();
+      } catch (e) {
+        console.warn("resume cleanup failed:", e);
+      }
     }
-    render();
 
-    function onAppResume() { ... }
-    document.addEventListener("visibilitychange", ...)
-    window.addEventListener("pageshow", ...)
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) onAppResume();
+    });
 
-    try { window.__APP_BOOTED = true; } catch {}
-
+    // bfcache / iOS pageshow 복귀 대응
+    window.addEventListener("pageshow", () => {
+      onAppResume();
+    });
 
     try { window.__APP_BOOTED = true; } catch {}
 
@@ -2165,6 +2184,15 @@ function renderJobWork() {
       await loadCompanies();
       render();
     }
+
+  } catch (e) {
+    console.error(e);
+    setFoot(`초기화 실패: ${e?.message || e}`);
+    render();
+    try { window.__APP_BOOTED = false; } catch {}
+  }
+})();
+
 
     // initial jobs if already have selection in memory (future)
   } catch (e) {
