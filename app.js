@@ -635,6 +635,8 @@ document.addEventListener("pointerup", (ev) => {
   if (ev.pointerType === "mouse") return;
   handleHeaderMenuAction(ev);
 }, true);
+ document.addEventListener("touchend", handleHeaderMenuAction, true);
+
 
 
 
@@ -2128,6 +2130,18 @@ function renderJobWork() {
       await loadCompanies();
     }
     render();
+
+    if (state.user) {
+      await loadCompanies();
+    }
+    render();
+
+    function onAppResume() { ... }
+    document.addEventListener("visibilitychange", ...)
+    window.addEventListener("pageshow", ...)
+
+    try { window.__APP_BOOTED = true; } catch {}
+
 
     try { window.__APP_BOOTED = true; } catch {}
 
