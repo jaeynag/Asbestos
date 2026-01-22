@@ -2148,7 +2148,7 @@ function renderJobWork() {
         __lastHeaderAction = { id: "", t: 0 };
 
         await initSupabase();
-        await loadSssion();
+        await loadSession();
 
         render();
       } catch (e) {
