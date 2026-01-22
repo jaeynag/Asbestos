@@ -1957,7 +1957,8 @@ function renderJobWork() {
        el("div", { class: "col", style: "flex:1; min-width:240px;" }, [addSampleBtn]),
      ]),
   ]);
-  root.appendchild(head);
+  
+  root.appendChild(head);
 
   // ===== Samples list =====
   const dateISO = state.activeDate;
