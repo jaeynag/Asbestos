@@ -447,6 +447,8 @@ const state = {
 
   pending: null,
 
+  navSeq: 0, // navigation token to ignore stale async loaders
+
   viewer: {
     open: false,
     items: [],
@@ -527,6 +529,7 @@ function goBack() {
   }
 
   if (state.job) {
+    state.navSeq = (state.navSeq|0) + 1;
     cleanupAllThumbBlobs();
     state.job = null;
     state.addOpen = false;
@@ -534,6 +537,7 @@ function goBack() {
     return;
   }
   if (state.mode) {
+    state.navSeq = (state.navSeq|0) + 1;
     cleanupAllThumbBlobs();
     state.mode = null;
     state.job = null;
@@ -542,6 +546,7 @@ function goBack() {
     return;
   }
   if (state.company) {
+    state.navSeq = (state.navSeq|0) + 1;
     cleanupAllThumbBlobs();
     state.company = null;
     state.mode = null;
@@ -560,6 +565,7 @@ menuChangeMode?.addEventListener("click", () => {
   closeSettings();
   if (!state.mode) return;
   if (!confirm("업무를 변경하시겠습니까?")) return;
+  state.navSeq = (state.navSeq|0) + 1;
   cleanupAllThumbBlobs();
   state.mode = null;
   state.job = null;
@@ -572,6 +578,7 @@ menuChangeCompany?.addEventListener("click", () => {
   closeSettings();
   if (!state.company) return;
   if (!confirm("회사를 변경하시겠습니까?")) return;
+  state.navSeq = (state.navSeq|0) + 1;
   cleanupAllThumbBlobs();
   state.company = null;
   state.mode = null;
@@ -583,9 +590,14 @@ menuChangeCompany?.addEventListener("click", () => {
 menuSignOut?.addEventListener("click", async () => {
   if (!state.user) return;
   closeSettings();
+  state.navSeq = (state.navSeq|0) + 1;
   cleanupAllThumbBlobs();
-  await initSupabase();
-  await supabase.auth.signOut();
+  try {
+    await initSupabase();
+    await supabase.auth.signOut();
+  } catch (e) {
+    console.warn('signOut failed:', e);
+  }
   state.user = null;
   state.company = null;
   state.mode = null;
@@ -1451,19 +1463,23 @@ async function loadCompanies() {
 
 async function loadJobs() {
   if (!state.company || !state.mode) return;
+  const navToken = state.navSeq;
   setFoot("현장 목록을 불러오는 중입니다...");
 
   // ✅ 첫 로그인 직후(iOS PWA/WebView) 토큰 부착 타이밍 이슈 보정
   await ensureAuthSynced();
+  if (navToken !== state.navSeq) return;
 
   let jobs = [];
   try {
     jobs = await fetchJobs(state.company.id, state.mode);
+    if (navToken !== state.navSeq) return;
     // 첫 호출이 비는 케이스가 있어 1회만 재시도
     if (state.user && Array.isArray(jobs) && jobs.length === 0) {
       await new Promise((r) => setTimeout(r, 180));
       await ensureAuthSynced();
       jobs = await fetchJobs(state.company.id, state.mode);
+      if (navToken !== state.navSeq) return;
     }
   } catch (e) {
     console.error(e);
@@ -1471,11 +1487,13 @@ async function loadJobs() {
     throw e;
   }
 
+  if (navToken !== state.navSeq) return;
   state.jobs = jobs || [];
   setFoot("준비되었습니다.");
 }
 
 async function loadJob(job) {
+  const navToken = state.navSeq;
   // 다른 현장/날짜를 여러 번 넘나들면 NAS 썸네일 blob URL이 누적될 수 있어 전환 시 정리
   cleanupAllThumbBlobs();
   if (state.viewer.open) closeViewer();
@@ -1487,8 +1505,16 @@ async function loadJob(job) {
   state.addLoc = "";
   state.addTime = "";
 
+  // 화면 전환을 먼저 반영(네트워크 지연 중에도 뒤로가기/로그아웃이 먹히게)
+  const today = new Date().toISOString().slice(0, 10);
+  state.activeDate = today;
+  state.dateDraft = today;
+  state.datePending = false;
+  render();
+
   setFoot("시료 목록을 불러오는 중입니다...");
   const samples = await fetchSamples(job.id);
+  if (navToken !== state.navSeq) return;
 
   const dates = Array.from(new Set(samples.map((s) => s.measurement_date))).sort();
   state.dates = dates;
@@ -1506,6 +1532,7 @@ async function loadJob(job) {
   }
 
   const photos = await fetchPhotosForSamples(samples.map((s) => s.id));
+  if (navToken !== state.navSeq) return;
   const byId = new Map(samples.map((s) => [s.id, s]));
   for (const p of photos) {
     const s = byId.get(p.sample_id);
@@ -1529,6 +1556,7 @@ async function loadJob(job) {
     state.samplesByDate.set(state.activeDate, []);
   }
 
+  if (navToken !== state.navSeq) return;
   setFoot("불러오기가 완료되었습니다.");
   render();
 }
@@ -1812,7 +1840,14 @@ function renderJobSelect() {
           el("button", {
             class: "btn primary small",
             text: "열기",
-            onclick: (ev) => { ev.stopPropagation(); loadJob(j); },
+            onclick: (ev) => {
+              ev.stopPropagation();
+              loadJob(j).catch((e) => {
+                console.error(e);
+                setFoot(e?.message || String(e));
+                alert(e?.message || String(e));
+              });
+            },
           }),
         ]),
       ]);
