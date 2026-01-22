@@ -549,9 +549,16 @@ function goBack() {
   }
 }
 
-document.addEventListener("click", (ev) => {
+let __lastHeaderAction = { id: "", t: 0 };
+
+function handleHeaderMenuAction(ev) {
   const hit = ev.target?.closest?.("#btnBack, #btnGear, #menuChangeMode, #menuChangeCompany, #menuSignOut");
   if (!hit) return;
+
+  // 모바일/일부 환경에서 click이 누락되거나 pointerup+click이 연속으로 들어오는 경우가 있어 중복 실행 방지
+  const now = Date.now();
+  if (__lastHeaderAction.id === hit.id && now - __lastHeaderAction.t < 350) return;
+  __lastHeaderAction = { id: hit.id, t: now };
 
   if (hit.id === "btnBack") {
     goBack();
@@ -605,7 +612,16 @@ document.addEventListener("click", (ev) => {
       }
     })();
   }
-});
+}
+
+// capture 단계에서 잡아서(다른 곳에서 stopPropagation 해도) 버튼이 씹히는 케이스를 줄임
+document.addEventListener("click", handleHeaderMenuAction, true);
+// iOS/PWA에서 click이 아예 안 나오는 경우 대비
+document.addEventListener("pointerup", (ev) => {
+  if (ev.pointerType === "mouse") return;
+  handleHeaderMenuAction(ev);
+}, true);
+
 
 
 /** =========================
