@@ -1744,7 +1744,7 @@ function renderModeSelect() {
         text: "농도",
         onclick: () => {
           (async () => {
-            const mySeq = ++__navSeq;     // ✅ 이 클릭으로 시작된 작업 번호
+            const mySeq = ++__navSeq; // ✅ 이 클릭으로 시작된 작업 번호
             state.mode = "density";
             state.job = null;
 
@@ -1759,14 +1759,15 @@ function renderModeSelect() {
             }
           })();
         },
+      }),
 
       el("button", {
         class: "tab" + (state.mode === "scatter" ? " active" : ""),
         text: "비산",
         onclick: () => {
           (async () => {
-            const mySeq = ++__navSeq;     // ✅ 이 클릭으로 시작된 작업 번호
-            state.mode = "density";
+            const mySeq = ++__navSeq; // ✅ 이 클릭으로 시작된 작업 번호
+            state.mode = "scatter";   // ✅ 여기 오타 수정 (density → scatter)
             state.job = null;
 
             setFoot("현장 목록을 불러오는 중입니다...");
@@ -1780,6 +1781,9 @@ function renderModeSelect() {
             }
           })();
         },
+      }),
+    ]),
+  ]);
 
   root.appendChild(wrap);
 }
