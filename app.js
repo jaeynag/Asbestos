@@ -1777,7 +1777,7 @@ function renderModeSelect() {
         onclick: () => {
           (async () => {
             const mySeq = ++__navSeq;
-            state.mode = "scatter";   // ✅ 여기 핵심 (기존 density로 잘못 들어가 있던 거 수정)
+            state.mode = "scatter";
             state.job = null;
             state.jobs = [];
 
@@ -1795,10 +1795,6 @@ function renderModeSelect() {
       }),
     ]),
   ]);
-
-  root.appendChild(wrap);
-}
-
 
   root.appendChild(wrap);
 }
