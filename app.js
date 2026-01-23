@@ -1460,9 +1460,7 @@ async function deleteJobAndRelated(job) {
 /** =========================
  *  Loaders
  *  ========================= */
-async function loadSession() {
-  // 일부 환경(iOS 홈화면/PC WebView)에서 getSession으로는 user가 보이는데,
-  // 내부 클라이언트에 access token 이 붙지 않아 RLS가 전부 비는 케이스가 있어 setSession으로 강제 동기화한다.
+async function loadSession(silent = false) {
   const { data } = await supabase.auth.getSession();
   const sess = data?.session || null;
   state.user = sess?.user || null;
@@ -1478,26 +1476,37 @@ async function loadSession() {
     }
   }
 
-  if (state.user) {
+  if (state.user && !silent) {
     setFoot('로그인되었습니다.');
   }
 }
 
+
 async function loadCompanies() {
+  await initSupabase();
+  await loadSession(true);
+
   setFoot("회사 목록을 불러오는 중입니다...");
   state.companies = await fetchCompanies();
   setFoot("준비되었습니다.");
 }
 
+
 async function loadJobs() {
+  await initSupabase();
+  await loadSession(true);
+
   if (!state.company || !state.mode) return;
   setFoot("현장 목록을 불러오는 중입니다...");
   state.jobs = await fetchJobs(state.company.id, state.mode);
   setFoot("준비되었습니다.");
 }
 
+
 async function loadJob(job) {
-  // 다른 현장/날짜를 여러 번 넘나들면 NAS 썸네일 blob URL이 누적될 수 있어 전환 시 정리
+  await initSupabase();
+  await loadSession(true);
+
   cleanupAllThumbBlobs();
   if (state.viewer.open) closeViewer();
   state.job = job;
@@ -1744,9 +1753,10 @@ function renderModeSelect() {
         text: "농도",
         onclick: () => {
           (async () => {
-            const mySeq = ++__navSeq; // ✅ 이 클릭으로 시작된 작업 번호
+            const mySeq = ++__navSeq;
             state.mode = "density";
             state.job = null;
+            state.jobs = [];
 
             setFoot("현장 목록을 불러오는 중입니다...");
             render();
@@ -1754,7 +1764,7 @@ function renderModeSelect() {
             try {
               await loadJobs();
             } finally {
-              if (mySeq !== __navSeq) return; // ✅ 뒤로가기/다른 전환이 있었으면 무시
+              if (mySeq !== __navSeq) return;
               render();
             }
           })();
@@ -1766,9 +1776,10 @@ function renderModeSelect() {
         text: "비산",
         onclick: () => {
           (async () => {
-            const mySeq = ++__navSeq; // ✅ 이 클릭으로 시작된 작업 번호
-            state.mode = "scatter";   // ✅ 여기 오타 수정 (density → scatter)
+            const mySeq = ++__navSeq;
+            state.mode = "scatter";   // ✅ 여기 핵심 (기존 density로 잘못 들어가 있던 거 수정)
             state.job = null;
+            state.jobs = [];
 
             setFoot("현장 목록을 불러오는 중입니다...");
             render();
@@ -1776,7 +1787,7 @@ function renderModeSelect() {
             try {
               await loadJobs();
             } finally {
-              if (mySeq !== __navSeq) return; // ✅ 뒤로가기/다른 전환이 있었으면 무시
+              if (mySeq !== __navSeq) return;
               render();
             }
           })();
@@ -1784,6 +1795,10 @@ function renderModeSelect() {
       }),
     ]),
   ]);
+
+  root.appendChild(wrap);
+}
+
 
   root.appendChild(wrap);
 }
