@@ -1468,34 +1468,33 @@ async function loadSession(silent = false) {
     if (error) throw error;
     sess = data?.session || null;
   } catch (e) {
-    // iOS PWA 복귀 직후 getSession이 튈 수 있음 → silent면 조용히 무시
     if (!silent) console.warn("getSession failed:", e);
     return null;
   }
 
-  // ✅ 핵심: silent=true일 때는 "null로 덮어써서 로그아웃처럼 만들지" 않는다.
+  // silent=true면 user를 null로 덮어쓰지 않음
   if (sess?.user) {
     state.user = sess.user;
   } else {
     if (!silent) state.user = null;
   }
 
-  // 토큰이 둘 다 있을 때만 보정(없으면 건드리지 않음)
-  if (sess?.access_token && sess?.refresh_token) {
+  // ✅ 변경: silent일 땐 setSession 금지 (루프/재진입 방지)
+  if (!silent && sess?.access_token && sess?.refresh_token) {
     try {
       await supabase.auth.setSession({
         access_token: sess.access_token,
         refresh_token: sess.refresh_token,
       });
     } catch (e) {
-      if (!silent) console.warn("setSession sync failed:", e);
+      console.warn("setSession sync failed:", e);
     }
   }
 
   if (state.user && !silent) setFoot("로그인되었습니다.");
-
   return sess;
 }
+
 
 
 
@@ -2233,20 +2232,31 @@ function renderJobWork() {
 
     try { window.__APP_BOOTED = true; } catch {}
 
+
     // auth state change
-    supabase.auth.onAuthStateChange(async (_event, session) => {
-      state.user = session?.user || null;
-      if (state.user) {
-        await loadCompanies().catch(() => null);
-      } else {
-        state.company = null;
-        state.mode = null;
-        state.job = null;
-        state.jobs = [];
-        state.companies = [];
-      }
-      render();
-    });
+ let __authStateHandling = false;
+
+supabase.auth.onAuthStateChange(async (_event, session) => {
+  if (__authStateHandling) return;
+  __authStateHandling = true;
+  try {
+    state.user = session?.user || null;
+
+    if (state.user) {
+      await loadCompanies().catch(() => null);
+    } else {
+      state.company = null;
+      state.mode = null;
+      state.job = null;
+      state.jobs = [];
+      state.companies = [];
+    }
+
+    render();
+  } finally {
+    __authStateHandling = false;
+  }
+});
 
     // initial companies if logged in
     if (state.user && !state.companies.length) {
