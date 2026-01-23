@@ -1461,10 +1461,26 @@ async function deleteJobAndRelated(job) {
  *  Loaders
  *  ========================= */
 async function loadSession(silent = false) {
-  const { data } = await supabase.auth.getSession();
-  const sess = data?.session || null;
-  state.user = sess?.user || null;
+  let sess = null;
 
+  try {
+    const { data, error } = await supabase.auth.getSession();
+    if (error) throw error;
+    sess = data?.session || null;
+  } catch (e) {
+    // iOS PWA 복귀 직후 getSession이 튈 수 있음 → silent면 조용히 무시
+    if (!silent) console.warn("getSession failed:", e);
+    return null;
+  }
+
+  // ✅ 핵심: silent=true일 때는 "null로 덮어써서 로그아웃처럼 만들지" 않는다.
+  if (sess?.user) {
+    state.user = sess.user;
+  } else {
+    if (!silent) state.user = null;
+  }
+
+  // 토큰이 둘 다 있을 때만 보정(없으면 건드리지 않음)
   if (sess?.access_token && sess?.refresh_token) {
     try {
       await supabase.auth.setSession({
@@ -1472,14 +1488,15 @@ async function loadSession(silent = false) {
         refresh_token: sess.refresh_token,
       });
     } catch (e) {
-      console.warn('setSession sync failed:', e);
+      if (!silent) console.warn("setSession sync failed:", e);
     }
   }
 
-  if (state.user && !silent) {
-    setFoot('로그인되었습니다.');
-  }
+  if (state.user && !silent) setFoot("로그인되었습니다.");
+
+  return sess;
 }
+
 
 
 async function loadCompanies() {
