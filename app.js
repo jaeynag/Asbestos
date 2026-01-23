@@ -426,6 +426,7 @@ async function initSupabase() {
   return __supabaseInitPromise;
 }
 
+let __navSeq = 0;
 
 /** =========================
  *  State
@@ -529,6 +530,7 @@ function updateHeader() {
 }
 
 function goBack() {
+  __navSeq++;
   closeSettings();
 
   if (state.viewer.open) {
@@ -1740,25 +1742,44 @@ function renderModeSelect() {
       el("button", {
         class: "tab" + (state.mode === "density" ? " active" : ""),
         text: "농도",
-        onclick: async () => {
-          state.mode = "density";
-          state.job = null;
-          await loadJobs();
-          render();
+        onclick: () => {
+          (async () => {
+            const mySeq = ++__navSeq;     // ✅ 이 클릭으로 시작된 작업 번호
+            state.mode = "density";
+            state.job = null;
+
+            setFoot("현장 목록을 불러오는 중입니다...");
+            render();
+
+            try {
+              await loadJobs();
+            } finally {
+              if (mySeq !== __navSeq) return; // ✅ 뒤로가기/다른 전환이 있었으면 무시
+              render();
+            }
+          })();
         },
-      }),
+
       el("button", {
         class: "tab" + (state.mode === "scatter" ? " active" : ""),
         text: "비산",
-        onclick: async () => {
-          state.mode = "scatter";
-          state.job = null;
-          await loadJobs();
-          render();
+        onclick: () => {
+          (async () => {
+            const mySeq = ++__navSeq;     // ✅ 이 클릭으로 시작된 작업 번호
+            state.mode = "density";
+            state.job = null;
+
+            setFoot("현장 목록을 불러오는 중입니다...");
+            render();
+
+            try {
+              await loadJobs();
+            } finally {
+              if (mySeq !== __navSeq) return; // ✅ 뒤로가기/다른 전환이 있었으면 무시
+              render();
+            }
+          })();
         },
-      }),
-    ]),
-  ]);
 
   root.appendChild(wrap);
 }
