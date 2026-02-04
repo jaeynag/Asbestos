@@ -670,6 +670,7 @@ document.addEventListener("pointerup", (ev) => {
  *  ========================= */
 function openModal(pending) {
   state.pending = pending;
+  state.__modalJustOpenedAt = Date.now();
   if (modalTitle) modalTitle.textContent = `사진 확인 · ${pending.roleLabel}`;
   if (modalPreview) modalPreview.src = pending.objectUrl;
   if (modalMeta) {
@@ -686,6 +687,7 @@ function closeModal() {
     // ignore
   }
   state.pending = null;
+  state.__modalJustOpenedAt = 0;
   if (modal) modal.hidden = true;
 }
 
@@ -1360,6 +1362,11 @@ function pickPhoto(sample, role, useCameraCapture) {
       sourceLabel: useCameraCapture ? "촬영" : "앨범",
     });
   });
+
+
+  // 사진 선택/촬영 직후 pageshow/visibilitychange로 onAppResume가 연달아 호출되면
+  // 방금 띄운 "사진 확인" 모달이 닫히는 케이스가 있어, 잠깐 보호 플래그를 둔다.
+  state.__photoPickerTS = Date.now();
 
   input.click();
 }
@@ -2190,7 +2197,12 @@ function renderJobWork() {
         if (typeof __openSwipeRow !== "undefined" && __openSwipeRow) closeSwipeRow(__openSwipeRow);
 
         if (state.viewer && state.viewer.open) closeViewer();
-        if (modal && !modal.hidden) closeModal();
+        // 사진 촬영/선택 복귀 타이밍에 pageshow/visibilitychange가 중첩 호출되면
+        // 방금 뜬 확인 모달이 닫히는 경우가 있어, 짧게 예외 처리한다.
+        const __now = Date.now();
+        const __recentPick = state.__photoPickerTS && (__now - state.__photoPickerTS < 8000);
+        const __modalJustOpened = state.__modalJustOpenedAt && (__now - state.__modalJustOpenedAt < 2000);
+        if (modal && !modal.hidden && !__recentPick && !__modalJustOpened) closeModal();
 
         // 헤더 메뉴 중복 방지 타이머도 리셋(복귀 직후 클릭 씹힘 방지)
         __lastHeaderAction = { id: "", t: 0 };
