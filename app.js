@@ -1782,6 +1782,7 @@ function renderModeSelect() {
             }
           })();
         },
+      }),
 
       el("button", {
         class: "tab" + (state.mode === "scatter" ? " active" : ""),
@@ -1803,6 +1804,9 @@ function renderModeSelect() {
             }
           })();
         },
+      }),
+    ]),
+  ]);
 
   root.appendChild(wrap);
 }
