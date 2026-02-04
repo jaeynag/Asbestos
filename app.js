@@ -1790,7 +1790,7 @@ function renderModeSelect() {
         onclick: () => {
           (async () => {
             const mySeq = ++__navSeq;     // ✅ 이 클릭으로 시작된 작업 번호
-            state.mode = "density";
+            state.mode = "scatter";
             state.job = null;
 
             setFoot("현장 목록을 불러오는 중입니다...");
