@@ -198,6 +198,26 @@ function setFoot(msg) {
   if (el) el.textContent = msg;
 }
 
+// 드롭다운(select) 사용 중에는 전체 render()로 DOM이 갈아엎어지면 드롭다운이 강제로 닫힘.
+// 업로드/썸네일 같은 비동기 갱신은 가능한 한 soft render로 지연 처리한다.
+let __softRenderTimer = null;
+function requestSoftRender() {
+  if (__softRenderTimer) return;
+
+  const tick = () => {
+    __softRenderTimer = null;
+
+    const ae = document.activeElement;
+    if (ae && ae.tagName === "SELECT") {
+      __softRenderTimer = setTimeout(tick, 120);
+      return;
+    }
+    render();
+  };
+
+  __softRenderTimer = setTimeout(tick, 0);
+}
+
 function normEmail(v) {
   return String(v || "").trim().toLowerCase();
 }
@@ -1222,7 +1242,7 @@ function ensureThumbUrl(sample, role) {
         console.warn("NAS 썸네일 생성 실패:", e);
       } finally {
         sample._thumbLoading[role] = false;
-        render();
+        requestSoftRender();
       }
     })();
 
@@ -1256,7 +1276,7 @@ async function uploadAndBindPhoto(sample, role, file) {
   sample._photoState ||= {};
   sample._photoPath ||= {};
   sample._photoState[role] = "uploading";
-  render();
+  requestSoftRender();
 
   try {
     const mode = state.mode;
@@ -1310,12 +1330,12 @@ async function uploadAndBindPhoto(sample, role, file) {
 
     ensureThumbUrl(sample, role);
     setFoot("업로드가 완료되었습니다.");
-    render();
+    requestSoftRender();
   } catch (e) {
     console.error(e);
     sample._photoState[role] = "failed";
     setFoot(`업로드에 실패했습니다: ${e?.message || e}`);
-    render();
+    requestSoftRender();
   }
 }
 
@@ -1460,69 +1480,45 @@ async function deleteJobAndRelated(job) {
 /** =========================
  *  Loaders
  *  ========================= */
-async function loadSession(silent = false) {
-  let sess = null;
+async function loadSession() {
+  // 일부 환경(iOS 홈화면/PC WebView)에서 getSession으로는 user가 보이는데,
+  // 내부 클라이언트에 access token 이 붙지 않아 RLS가 전부 비는 케이스가 있어 setSession으로 강제 동기화한다.
+  const { data } = await supabase.auth.getSession();
+  const sess = data?.session || null;
+  state.user = sess?.user || null;
 
-  try {
-    const { data, error } = await supabase.auth.getSession();
-    if (error) throw error;
-    sess = data?.session || null;
-  } catch (e) {
-    if (!silent) console.warn("getSession failed:", e);
-    return null;
-  }
-
-  // silent=true면 user를 null로 덮어쓰지 않음
-  if (sess?.user) {
-    state.user = sess.user;
-  } else {
-    if (!silent) state.user = null;
-  }
-
-  // ✅ 변경: silent일 땐 setSession 금지 (루프/재진입 방지)
-  if (!silent && sess?.access_token && sess?.refresh_token) {
+  if (sess?.access_token && sess?.refresh_token) {
     try {
       await supabase.auth.setSession({
         access_token: sess.access_token,
         refresh_token: sess.refresh_token,
       });
     } catch (e) {
-      console.warn("setSession sync failed:", e);
+      console.warn('setSession sync failed:', e);
     }
   }
 
-  if (state.user && !silent) setFoot("로그인되었습니다.");
-  return sess;
+  if (state.user) {
+    setFoot('로그인되었습니다.');
+  }
 }
 
-
-
-
 async function loadCompanies() {
-  await initSupabase();
-  await loadSession(true);
-
   setFoot("회사 목록을 불러오는 중입니다...");
   state.companies = await fetchCompanies();
   setFoot("준비되었습니다.");
 }
 
-
 async function loadJobs() {
-  await initSupabase();
-  await loadSession(true);
-
   if (!state.company || !state.mode) return;
   setFoot("현장 목록을 불러오는 중입니다...");
   state.jobs = await fetchJobs(state.company.id, state.mode);
   setFoot("준비되었습니다.");
 }
 
-
 async function loadJob(job) {
-  await initSupabase();
-  await loadSession(true);
-
+  // 다른 현장/날짜를 여러 번 넘나들면 NAS 썸네일 blob URL이 누적될 수 있어 전환 시 정리
+  const prevActiveDate = state.activeDate;
   cleanupAllThumbBlobs();
   if (state.viewer.open) closeViewer();
   state.job = job;
@@ -1538,7 +1534,9 @@ async function loadJob(job) {
 
   const dates = Array.from(new Set(samples.map((s) => s.measurement_date))).sort();
   state.dates = dates;
-  state.activeDate = dates[0] || new Date().toISOString().slice(0, 10);
+  state.activeDate = (prevActiveDate && dates.includes(prevActiveDate))
+    ? prevActiveDate
+    : (dates[0] || new Date().toISOString().slice(0, 10));
 
   for (const d of dates) state.samplesByDate.set(d, []);
   for (const s of samples) {
@@ -1769,10 +1767,9 @@ function renderModeSelect() {
         text: "농도",
         onclick: () => {
           (async () => {
-            const mySeq = ++__navSeq;
+            const mySeq = ++__navSeq;     // ✅ 이 클릭으로 시작된 작업 번호
             state.mode = "density";
             state.job = null;
-            state.jobs = [];
 
             setFoot("현장 목록을 불러오는 중입니다...");
             render();
@@ -1780,22 +1777,20 @@ function renderModeSelect() {
             try {
               await loadJobs();
             } finally {
-              if (mySeq !== __navSeq) return;
+              if (mySeq !== __navSeq) return; // ✅ 뒤로가기/다른 전환이 있었으면 무시
               render();
             }
           })();
         },
-      }),
 
       el("button", {
         class: "tab" + (state.mode === "scatter" ? " active" : ""),
         text: "비산",
         onclick: () => {
           (async () => {
-            const mySeq = ++__navSeq;
-            state.mode = "scatter";
+            const mySeq = ++__navSeq;     // ✅ 이 클릭으로 시작된 작업 번호
+            state.mode = "density";
             state.job = null;
-            state.jobs = [];
 
             setFoot("현장 목록을 불러오는 중입니다...");
             render();
@@ -1803,14 +1798,11 @@ function renderModeSelect() {
             try {
               await loadJobs();
             } finally {
-              if (mySeq !== __navSeq) return;
+              if (mySeq !== __navSeq) return; // ✅ 뒤로가기/다른 전환이 있었으면 무시
               render();
             }
           })();
         },
-      }),
-    ]),
-  ]);
 
   root.appendChild(wrap);
 }
@@ -2232,31 +2224,20 @@ function renderJobWork() {
 
     try { window.__APP_BOOTED = true; } catch {}
 
-
     // auth state change
- let __authStateHandling = false;
-
-supabase.auth.onAuthStateChange(async (_event, session) => {
-  if (__authStateHandling) return;
-  __authStateHandling = true;
-  try {
-    state.user = session?.user || null;
-
-    if (state.user) {
-      await loadCompanies().catch(() => null);
-    } else {
-      state.company = null;
-      state.mode = null;
-      state.job = null;
-      state.jobs = [];
-      state.companies = [];
-    }
-
-    render();
-  } finally {
-    __authStateHandling = false;
-  }
-});
+    supabase.auth.onAuthStateChange(async (_event, session) => {
+      state.user = session?.user || null;
+      if (state.user) {
+        await loadCompanies().catch(() => null);
+      } else {
+        state.company = null;
+        state.mode = null;
+        state.job = null;
+        state.jobs = [];
+        state.companies = [];
+      }
+      render();
+    });
 
     // initial companies if logged in
     if (state.user && !state.companies.length) {
