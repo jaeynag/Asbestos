@@ -448,6 +448,64 @@ async function initSupabase() {
 
 let __navSeq = 0;
 
+// ===== Navigation persistence (mobile Chrome tab discard 대응) =====
+const NAV_KEY = "airapp:lastNav:v1";
+function saveNavState() {
+  try {
+    const st = safeStorage();
+    const payload = {
+      companyId: state.company?.id || null,
+      mode: state.mode || null,
+      jobId: state.job?.id || null,
+      t: Date.now(),
+    };
+    st.setItem(NAV_KEY, JSON.stringify(payload));
+  } catch {}
+}
+function readNavState() {
+  try {
+    const st = safeStorage();
+    const raw = st.getItem(NAV_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+// 로그인 상태에서 마지막 작업 위치(회사/모드/현장) 복구
+async function tryRestoreNavState() {
+  // 이미 사용자가 선택해둔 상태가 있으면 건드리지 않음
+  if (state.company || state.mode || state.job) return;
+
+  const nav = readNavState();
+  if (!nav || !nav.companyId || !nav.mode) return;
+
+  // 회사 복구
+  const c = (state.companies || []).find((x) => x.id === nav.companyId);
+  if (!c) return;
+
+  state.company = c;
+  state.mode = (nav.mode === "scatter" ? "scatter" : "density");
+  state.job = null;
+  state.jobs = [];
+  state.samplesByDate = new Map();
+  state.dates = [];
+  state.activeDate = null;
+
+  setFoot("이전 작업 위치를 복구하는 중입니다...");
+  render();
+
+  await loadJobs();
+
+  if (nav.jobId) {
+    const j = (state.jobs || []).find((x) => x.id === nav.jobId);
+    if (j) {
+      await loadJob(j);
+    }
+  }
+}
+
 /** =========================
  *  State
  *  ========================= */
@@ -566,6 +624,7 @@ function goBack() {
     cleanupAllThumbBlobs();
     state.job = null;
     state.addOpen = false;
+    saveNavState();
     render();
     return;
   }
@@ -574,6 +633,7 @@ function goBack() {
     state.mode = null;
     state.job = null;
     state.addOpen = false;
+    saveNavState();
     render();
     return;
   }
@@ -583,6 +643,7 @@ function goBack() {
     state.mode = null;
     state.job = null;
     state.addOpen = false;
+    saveNavState();
     render();
     return;
   }
@@ -1159,6 +1220,9 @@ async function nasFetchBlobUrl(relPath) {
 // job/회사/로그아웃 전환 시 정리 루틴을 둔다.
 // (viewer는 state.viewer.objectUrl로 별도 관리)
 const __thumbBlobUrls = new Set();
+// 사진 썸네일 URL 캐시(렌더/날짜 전환 시 재다운로드/깜빡임 완화)
+// key: `${role}|${storage_path}`  value: { url, exp }
+const __thumbCache = new Map();
 
 function _revokeBlobUrl(url) {
   if (typeof url === "string" && url.startsWith("blob:")) {
@@ -1200,6 +1264,11 @@ function cleanupAllThumbBlobs() {
     _revokeBlobUrl(url);
   }
   __thumbBlobUrls.clear();
+
+  // blob: URL은 revoke 되면 재사용 불가 → 캐시에서도 제거
+  for (const [k, v] of Array.from(__thumbCache.entries())) {
+    if (v && typeof v.url === "string" && v.url.startsWith("blob:")) __thumbCache.delete(k);
+  }
 }
 
 function ensureThumbUrl(sample, role) {
@@ -1210,9 +1279,20 @@ function ensureThumbUrl(sample, role) {
   sample._thumbExp ||= {};
   sample._thumbLoading ||= {};
 
+  const cacheKey = `${role}|${path}`;
+  const now0 = Date.now();
+  const cached = __thumbCache.get(cacheKey);
+  if (cached && cached.url && (cached.exp || 0) > now0 + 15_000) {
+    // 캐시 히트면 즉시 세팅(깜빡임/재다운로드 방지)
+    sample._thumbUrl[role] = cached.url;
+    sample._thumbExp[role] = cached.exp;
+    return;
+  }
+
   // full URL이면 그대로
   if (isHttpUrl(path)) {
     _setThumbUrl(sample, role, path, Date.now() + 365 * 24 * 3600 * 1000);
+    __thumbCache.set(`${role}|${path}`, { url: sample._thumbUrl?.[role] || path, exp: sample._thumbExp?.[role] || (Date.now() + 365 * 24 * 3600 * 1000) });
     return;
   }
 
@@ -1232,6 +1312,7 @@ function ensureThumbUrl(sample, role) {
         // 1) public URL로 먼저 세팅 (NAS가 public 허용이면 이걸로 끝)
         if (NAS_FILE_BASE) {
           _setThumbUrl(sample, role, joinUrl(NAS_FILE_BASE, rel), Date.now() + 365 * 24 * 3600 * 1000);
+          __thumbCache.set(`${role}|${path}`, { url: sample._thumbUrl?.[role], exp: sample._thumbExp?.[role] });
         }
 
         // 2) public이 막혀있으면 img는 깨짐 → Authorization으로 blob URL 생성해서 교체
@@ -1239,6 +1320,7 @@ function ensureThumbUrl(sample, role) {
         if (auth) {
           const blobUrl = await nasFetchBlobUrl(rel);
           _setThumbUrl(sample, role, blobUrl, Date.now() + 365 * 24 * 3600 * 1000);
+          __thumbCache.set(`${role}|${path}`, { url: sample._thumbUrl?.[role], exp: sample._thumbExp?.[role] });
         }
       } catch (e) {
         console.warn("NAS 썸네일 생성 실패:", e);
@@ -1262,11 +1344,12 @@ function ensureThumbUrl(sample, role) {
     try {
       const url = await getSignedUrl(path);
       _setThumbUrl(sample, role, url, Date.now() + SIGNED_URL_TTL_SEC * 1000);
+      __thumbCache.set(`${role}|${path}`, { url: sample._thumbUrl?.[role], exp: sample._thumbExp?.[role] });
     } catch (e) {
       console.error("Signed URL 생성 실패:", e);
     } finally {
       sample._thumbLoading[role] = false;
-      render();
+      requestSoftRender();
     }
   })();
 }
@@ -1529,6 +1612,7 @@ async function loadJob(job) {
   cleanupAllThumbBlobs();
   if (state.viewer.open) closeViewer();
   state.job = job;
+  saveNavState();
   state.samplesByDate = new Map();
   state.dates = [];
   state.activeDate = null;
@@ -1749,6 +1833,7 @@ function renderCompanySelect() {
                 state.samplesByDate = new Map();
                 state.dates = [];
                 state.activeDate = null;
+                saveNavState();
                 render();
               },
             }),
@@ -1777,6 +1862,7 @@ function renderModeSelect() {
             const mySeq = ++__navSeq;     // ✅ 이 클릭으로 시작된 작업 번호
             state.mode = "density";
             state.job = null;
+            saveNavState();
 
             setFoot("현장 목록을 불러오는 중입니다...");
             render();
@@ -1799,6 +1885,7 @@ function renderModeSelect() {
             const mySeq = ++__navSeq;     // ✅ 이 클릭으로 시작된 작업 번호
             state.mode = "scatter";
             state.job = null;
+            saveNavState();
 
             setFoot("현장 목록을 불러오는 중입니다...");
             render();
@@ -2202,7 +2289,7 @@ function renderJobWork() {
         const __now = Date.now();
         const __recentPick = state.__photoPickerTS && (__now - state.__photoPickerTS < 8000);
         const __modalJustOpened = state.__modalJustOpenedAt && (__now - state.__modalJustOpenedAt < 2000);
-        if (modal && !modal.hidden && !__recentPick && !__modalJustOpened) closeModal();
+        if (modal && !modal.hidden && !state.pending && !__recentPick && !__modalJustOpened) closeModal();
 
         // 헤더 메뉴 중복 방지 타이머도 리셋(복귀 직후 클릭 씹힘 방지)
         __lastHeaderAction = { id: "", t: 0 };
@@ -2245,12 +2332,14 @@ function renderJobWork() {
       state.user = session?.user || null;
       if (state.user) {
         await loadCompanies().catch(() => null);
+        await tryRestoreNavState().catch(() => null);
       } else {
         state.company = null;
         state.mode = null;
         state.job = null;
         state.jobs = [];
         state.companies = [];
+        saveNavState();
       }
       render();
     });
@@ -2258,6 +2347,7 @@ function renderJobWork() {
     // initial companies if logged in
     if (state.user && !state.companies.length) {
       await loadCompanies();
+      await tryRestoreNavState().catch(() => null);
       render();
     }
 
