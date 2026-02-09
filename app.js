@@ -1789,16 +1789,12 @@ async function deleteJobAndRelated(job) {
     setFoot("현장 삭제가 완료되었습니다.");
     await loadJobs();
     render();
+  } catch (e) {
+  console.error(e);
+  setFoot(`현장 삭제에 실패했습니다: ${e?.message || e}`);
+  alert(e?.message || String(e));
   }
-        __resumeHandling = false;
-      }
-      catch (e) {
-    console.error(e);
-    setFoot(`현장 삭제에 실패했습니다: ${e?.message || e}`);
-    alert(e?.message || String(e));
   }
-}
-
 /** =========================
  *  Loaders
  *  ========================= */
