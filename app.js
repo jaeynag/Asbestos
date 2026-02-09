@@ -448,6 +448,7 @@ async function initSupabase() {
 }
 
 let __navSeq = 0;
+let __resumeHandling = false;
 
 // ===== Navigation persistence (mobile Chrome tab discard 대응) =====
 const NAV_KEY = "airapp:lastNav:v1";
@@ -1788,7 +1789,10 @@ async function deleteJobAndRelated(job) {
     setFoot("현장 삭제가 완료되었습니다.");
     await loadJobs();
     render();
-  } catch (e) {
+  }
+        __resumeHandling = false;
+      }
+      catch (e) {
     console.error(e);
     setFoot(`현장 삭제에 실패했습니다: ${e?.message || e}`);
     alert(e?.message || String(e));
@@ -1835,10 +1839,25 @@ async function loadJobs() {
 }
 
 async function loadJob(job) {
-  // 다른 현장/날짜를 여러 번 넘나들면 NAS 썸네일 blob URL이 누적될 수 있어 전환 시 정리
+  // NOTE:
+  // 기존 loadJob은 fetch 실패(네트워크/세션/RLS 등) 중간에 state를 먼저 비워버려서
+  // "백그라운드 복귀 후 현장이 안 보임"처럼 보이는 증상을 만들 수 있었다.
+  // → 성공적으로 데이터를 받아온 뒤에만 state를 교체하도록 순서를 바꾼다.
+
   const prevActiveDate = state.activeDate;
+
+  setFoot("시료 목록을 불러오는 중입니다...");
+  const samples = await fetchSamples(job.id);
+
+  // photos는 sample id가 필요하므로 samples fetch 이후에만 가능
+  const sampleIds = (samples || []).map((s) => s.id);
+  const photos = await fetchPhotosForSamples(sampleIds);
+
+  // 데이터 fetch가 성공했으니, 이제 전환/리로드에 필요한 정리 수행
   cleanupAllThumbBlobs();
   if (state.viewer.open) closeViewer();
+
+  // state 교체(이 시점부터 화면 데이터가 바뀜)
   state.job = job;
   saveNavState();
   state.samplesByDate = new Map();
@@ -1848,29 +1867,24 @@ async function loadJob(job) {
   state.addLoc = "";
   state.addTime = "";
 
-  setFoot("시료 목록을 불러오는 중입니다...");
-  const samples = await fetchSamples(job.id);
-
-  const dates = Array.from(new Set(samples.map((s) => s.measurement_date))).sort();
+  const dates = Array.from(new Set((samples || []).map((s) => s.measurement_date))).sort();
   state.dates = dates;
   state.activeDate = (prevActiveDate && dates.includes(prevActiveDate))
     ? prevActiveDate
     : (dates[0] || new Date().toISOString().slice(0, 10));
 
   for (const d of dates) state.samplesByDate.set(d, []);
-  for (const s of samples) {
+  for (const s of (samples || [])) {
     s._photoState = {};
     s._photoPath = {};
     s._thumbUrl = {};
-    // JS에서 TypeScript의 non-null assertion(!) 문법은 파싱 에러를 내므로 안전하게 처리
     const bucket = state.samplesByDate.get(s.measurement_date);
     if (bucket) bucket.push(s);
     else state.samplesByDate.set(s.measurement_date, [s]);
   }
 
-  const photos = await fetchPhotosForSamples(samples.map((s) => s.id));
-  const byId = new Map(samples.map((s) => [s.id, s]));
-  for (const p of photos) {
+  const byId = new Map((samples || []).map((s) => [s.id, s]));
+  for (const p of (photos || [])) {
     const s = byId.get(p.sample_id);
     if (!s) continue;
 
@@ -1892,10 +1906,10 @@ async function loadJob(job) {
     state.samplesByDate.set(state.activeDate, []);
   }
 
-    // Load pending (deferred) photos for this job (IndexedDB)
+  // Load pending (deferred) photos for this job (IndexedDB)
   await hydratePendingPhotosForJob(job.id);
 
-setFoot("불러오기가 완료되었습니다.");
+  setFoot("불러오기가 완료되었습니다.");
   render();
 }
 
@@ -2540,6 +2554,9 @@ function renderJobWork() {
     // ===== iOS 홈화면(PWA) 백그라운드 복귀 시 터치/키 씹힘 방어 =====
     async function onAppResume() {
       try {
+        if (__resumeHandling) return;
+        __resumeHandling = true;
+
         // 떠있는 오버레이/메뉴가 터치 막는 케이스 방지
         closeSettings();
         if (typeof __openSwipeRow !== "undefined" && __openSwipeRow) closeSwipeRow(__openSwipeRow);
@@ -2575,6 +2592,10 @@ function renderJobWork() {
         setFoot("동기화 실패(네트워크 확인)");
         render();
       }
+      finally {
+        __resumeHandling = false;
+      }
+
     }
 
     document.addEventListener("visibilitychange", () => {
