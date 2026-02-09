@@ -1201,47 +1201,17 @@ async function nasFetchBlobUrl(relPath) {
   if (!NAS_GATEWAY_URL) throw new Error("NAS_GATEWAY_URL이 설정되지 않았습니다.");
   const rel = String(relPath || "").replace(/^\/+/, "");
   const enc = rel.split("/").map(encodeURIComponent).join("/");
-  const baseUrl = joinUrl(NAS_GATEWAY_URL, `object/authenticated/${enc}`);
+  const url = joinUrl(NAS_GATEWAY_URL, `object/authenticated/${enc}`);
 
   const auth = await getNasAuthorization();
-  const headers = auth ? { Authorization: auth, Accept: "image/*" } : { Accept: "image/*" };
-
-  const attempt = async (url) => {
-    const resp = await fetch(url, {
-      method: "GET",
-      headers,
-      cache: "no-store",
-      // 쿠키 기반이 아니라 Authorization만 쓰는 구조라 credentials는 굳이 필요 없음
-      credentials: "omit",
-    });
-    if (!resp.ok) {
-      const msg = await resp.text().catch(() => "");
-      throw new Error(`NAS 파일 조회 실패 (${resp.status}): ${msg || "요청이 거부되었습니다."}`);
-    }
-    const blob = await resp.blob();
-    return URL.createObjectURL(blob);
-  };
-
-  try {
-    return await attempt(baseUrl);
-  } catch (e) {
-    // 모바일 백그라운드 복귀 직후(특히 HTTP/2) 간헐적으로 첫 요청이 TypeError/Failed to fetch로 죽는 케이스가 있음 → 1회만 재시도
-    const msg = String(e?.message || e || "");
-    const retryable =
-      e?.name === "TypeError" ||
-      msg.includes("Failed to fetch") ||
-      msg.includes("NetworkError") ||
-      msg.includes("ERR_HTTP2") ||
-      msg.includes("HTTP2");
-
-    if (!retryable) throw e;
-
-    await new Promise((r) => setTimeout(r, 250));
-    const sep = baseUrl.includes("?") ? "&" : "?";
-    return await attempt(baseUrl + sep + "__r=" + Date.now());
+  const resp = await fetch(url, { method: "GET", headers: auth ? { Authorization: auth } : undefined });
+  if (!resp.ok) {
+    const msg = await resp.text().catch(() => "");
+    throw new Error(`NAS 파일 조회 실패 (${resp.status}): ${msg || "요청이 거부되었습니다."}`);
   }
+  const blob = await resp.blob();
+  return URL.createObjectURL(blob);
 }
-
 
 /** =========================
  *  Thumbnails
@@ -1828,30 +1798,58 @@ async function deleteJobAndRelated(job) {
 /** =========================
  *  Loaders
  *  ========================= */
+let __sessionSyncPromise = null;
+let __lastSessionSyncAt = 0;
+
 async function loadSession() {
   // 일부 환경(iOS 홈화면/PC WebView)에서 getSession으로는 user가 보이는데,
   // 내부 클라이언트에 access token 이 붙지 않아 RLS가 전부 비는 케이스가 있어 setSession으로 강제 동기화한다.
-  const { data } = await supabase.auth.getSession();
-  const sess = data?.session || null;
-  state.user = sess?.user || null;
+  if (__sessionSyncPromise) return __sessionSyncPromise;
 
-  if (sess?.access_token && sess?.refresh_token) {
-    try {
-      await supabase.auth.setSession({
-        access_token: sess.access_token,
-        refresh_token: sess.refresh_token,
-      });
-    } catch (e) {
-      console.warn('setSession sync failed:', e);
+  __sessionSyncPromise = (async () => {
+    const { data } = await supabase.auth.getSession();
+    const sess = data?.session || null;
+    state.user = sess?.user || null;
+
+    const now = Date.now();
+    if (sess?.access_token && sess?.refresh_token && (now - __lastSessionSyncAt > 15000)) {
+      __lastSessionSyncAt = now;
+      try {
+        try {
+          await supabase.auth.setSession({
+            access_token: sess.access_token,
+            refresh_token: sess.refresh_token,
+          });
+        } catch (e) {
+          // iOS/모바일 복귀 시 setSession 경합으로 AbortError가 나는 케이스가 있어 1회 재시도
+          const msg = String(e?.message || e);
+          if (e?.name === "AbortError" || /aborted|AbortError/i.test(msg)) {
+            await new Promise((r) => setTimeout(r, 250));
+            await supabase.auth.setSession({
+              access_token: sess.access_token,
+              refresh_token: sess.refresh_token,
+            });
+          } else {
+            throw e;
+          }
+        }
+      } catch (e) {
+        console.warn("setSession sync failed:", e);
+      }
     }
-  }
 
-  if (state.user) {
-    setFoot('로그인되었습니다.');
+    if (state.user) setFoot("로그인되었습니다.");
+  })();
+
+  try {
+    return await __sessionSyncPromise;
+  } finally {
+    __sessionSyncPromise = null;
   }
 }
 
-async function loadCompanies() {
+async function loadCompanies
+() {
   setFoot("회사 목록을 불러오는 중입니다...");
   state.companies = await fetchCompanies();
   setFoot("준비되었습니다.");
@@ -1865,37 +1863,30 @@ async function loadJobs() {
 }
 
 async function loadJob(job) {
-  // 다른 현장/날짜를 여러 번 넘나들면 NAS 썸네일 blob URL이 누적될 수 있어 전환 시 정리
+  // NOTE: 모바일 백그라운드 복귀 시 네트워크/세션 흔들림으로 fetch가 실패할 수 있음.
+  // 기존처럼 먼저 state를 비우면 "현장 화면이 통째로 빈 상태"로 떨어지므로,
+  // fetch가 끝까지 성공한 뒤에만 state를 교체하는 트랜잭션 방식으로 처리한다.
+
   const prevActiveDate = state.activeDate;
-  cleanupAllThumbBlobs();
-  if (state.viewer.open) closeViewer();
-  state.job = job;
-  saveNavState();
-  state.samplesByDate = new Map();
-  state.dates = [];
-  state.activeDate = null;
-  state.addOpen = false;
-  state.addLoc = "";
-  state.addTime = "";
 
   setFoot("시료 목록을 불러오는 중입니다...");
   const samples = await fetchSamples(job.id);
 
   const dates = Array.from(new Set(samples.map((s) => s.measurement_date))).sort();
-  state.dates = dates;
-  state.activeDate = (prevActiveDate && dates.includes(prevActiveDate))
+  const nextActiveDate = (prevActiveDate && dates.includes(prevActiveDate))
     ? prevActiveDate
     : (dates[0] || new Date().toISOString().slice(0, 10));
 
-  for (const d of dates) state.samplesByDate.set(d, []);
+  const tmpSamplesByDate = new Map();
+  for (const d of dates) tmpSamplesByDate.set(d, []);
+
   for (const s of samples) {
     s._photoState = {};
     s._photoPath = {};
     s._thumbUrl = {};
-    // JS에서 TypeScript의 non-null assertion(!) 문법은 파싱 에러를 내므로 안전하게 처리
-    const bucket = state.samplesByDate.get(s.measurement_date);
+    const bucket = tmpSamplesByDate.get(s.measurement_date);
     if (bucket) bucket.push(s);
-    else state.samplesByDate.set(s.measurement_date, [s]);
+    else tmpSamplesByDate.set(s.measurement_date, [s]);
   }
 
   const photos = await fetchPhotosForSamples(samples.map((s) => s.id));
@@ -1913,8 +1904,25 @@ async function loadJob(job) {
 
     s._photoState[role] = p.state === "failed" ? "failed" : "done";
     s._photoPath[role] = p.storage_path;
+    // 썸네일은 비동기 생성되므로 soft render를 통해 UI 흔들림을 줄인다.
     ensureThumbUrl(s, role);
   }
+
+  // ===== commit (state 교체는 여기서) =====
+  // 다른 현장/날짜를 여러 번 넘나들면 NAS 썸네일 blob URL이 누적될 수 있어 전환 시 정리
+  cleanupAllThumbBlobs();
+  if (state.viewer.open) closeViewer();
+
+  state.job = job;
+  saveNavState();
+
+  state.samplesByDate = tmpSamplesByDate;
+  state.dates = dates;
+  state.activeDate = nextActiveDate;
+
+  state.addOpen = false;
+  state.addLoc = "";
+  state.addTime = "";
 
   // 날짜가 없으면 오늘을 탭으로 만들어서 추가 UX
   if (!state.dates.includes(state.activeDate)) {
@@ -1922,15 +1930,16 @@ async function loadJob(job) {
     state.samplesByDate.set(state.activeDate, []);
   }
 
-    // Load pending (deferred) photos for this job (IndexedDB)
+  // Load pending (deferred) photos for this job (IndexedDB)
   await hydratePendingPhotosForJob(job.id);
 
-setFoot("불러오기가 완료되었습니다.");
+  setFoot("불러오기가 완료되었습니다.");
   render();
 }
 
 /** =========================
  *  Render
+
  *  ========================= */
 function render() {
   closeSettings();
@@ -2233,7 +2242,16 @@ function renderJobSelect() {
           el("button", {
             class: "btn primary small",
             text: "열기",
-            onclick: (ev) => { ev.stopPropagation(); loadJob(j); },
+            onclick: async (ev) => {
+              ev.stopPropagation();
+              try {
+                await loadJob(j);
+              } catch (e) {
+                console.error(e);
+                setFoot(e?.message || String(e));
+                alert(e?.message || String(e));
+              }
+            },
           }),
         ]),
       ]);
@@ -2568,7 +2586,10 @@ function renderJobWork() {
     render();
 
     // ===== iOS 홈화면(PWA) 백그라운드 복귀 시 터치/키 씹힘 방어 =====
+    let __resumeHandling = false;
     async function onAppResume() {
+      if (__resumeHandling) return;
+      __resumeHandling = true;
       try {
         // 떠있는 오버레이/메뉴가 터치 막는 케이스 방지
         closeSettings();
@@ -2604,6 +2625,8 @@ function renderJobWork() {
         console.warn("resume cleanup/fetch failed:", e);
         setFoot("동기화 실패(네트워크 확인)");
         render();
+      } finally {
+        __resumeHandling = false;
       }
     }
 
