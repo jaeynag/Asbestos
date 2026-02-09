@@ -368,6 +368,7 @@ function createSwipeRow(contentInner, onDelete) {
 
 function dotClass(status) {
   if (status === "uploading") return "dot blue blink";
+  if (status === "pending") return "dot blue";
   if (status === "done") return "dot green";
   if (status === "failed") return "dot red";
   return "dot";
@@ -1354,6 +1355,198 @@ function ensureThumbUrl(sample, role) {
   })();
 }
 
+
+/** =========================
+ *  Deferred photo upload (Draft Queue)
+ *  - Stores picked photo blobs in IndexedDB so background/tab-discard won't lose them.
+ *  - Each (jobId, sampleId, role) has at most 1 pending blob (new pick overwrites previous).
+ *  ========================= */
+const PHOTOQ_DB = "air_sample_photoq_v1";
+const PHOTOQ_STORE = "photo_queue";
+const __pendingPhoto = new Map(); // key -> { jobId, sampleId, role, blob, name, type, ts, objectUrl? }
+
+function _photoKey(jobId, sampleId, role) {
+  return `${jobId}::${sampleId}::${role}`;
+}
+
+function openPhotoQ() {
+  return new Promise((resolve, reject) => {
+    try {
+      const req = indexedDB.open(PHOTOQ_DB, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(PHOTOQ_STORE)) {
+          const st = db.createObjectStore(PHOTOQ_STORE, { keyPath: "key" });
+          st.createIndex("jobId", "jobId", { unique: false });
+          st.createIndex("ts", "ts", { unique: false });
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error || new Error("IndexedDB open failed"));
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+async function photoqPut(item) {
+  const db = await openPhotoQ();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(PHOTOQ_STORE, "readwrite");
+    tx.oncomplete = () => { db.close(); resolve(true); };
+    tx.onerror = () => { db.close(); reject(tx.error || new Error("photoqPut failed")); };
+    tx.objectStore(PHOTOQ_STORE).put(item);
+  });
+}
+
+async function photoqDel(key) {
+  const db = await openPhotoQ();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(PHOTOQ_STORE, "readwrite");
+    tx.oncomplete = () => { db.close(); resolve(true); };
+    tx.onerror = () => { db.close(); reject(tx.error || new Error("photoqDel failed")); };
+    tx.objectStore(PHOTOQ_STORE).delete(key);
+  });
+}
+
+async function photoqListByJob(jobId) {
+  const db = await openPhotoQ();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(PHOTOQ_STORE, "readonly");
+    tx.onerror = () => { db.close(); reject(tx.error || new Error("photoqList failed")); };
+    const st = tx.objectStore(PHOTOQ_STORE);
+    const idx = st.index("jobId");
+    const req = idx.getAll(jobId);
+    req.onsuccess = () => { const out = req.result || []; db.close(); resolve(out); };
+    req.onerror = () => { db.close(); reject(req.error || new Error("photoqList failed")); };
+  });
+}
+
+function pendingCountForJob(jobId) {
+  let n = 0;
+  for (const v of __pendingPhoto.values()) if (v.jobId === jobId) n++;
+  return n;
+}
+
+function _applyPendingToSample(sample, role, objectUrl) {
+  sample._photoState ||= {};
+  sample._photoState[role] = "pending";
+  sample._thumbUrl ||= {};
+  sample._thumbExp ||= {};
+  // revoke previous thumb url if it was blob
+  try {
+    const prev = sample._thumbUrl[role];
+    if (prev && String(prev).startsWith("blob:")) _revokeBlobUrl(prev);
+  } catch {}
+  sample._thumbUrl[role] = objectUrl;
+  sample._thumbExp[role] = Date.now() + 1000 * 60 * 60 * 24 * 365; // effectively "never" for local blob
+}
+
+async function hydratePendingPhotosForJob(jobId) {
+  try {
+    const items = await photoqListByJob(jobId);
+    // clear in-memory pending for this job (and revoke object urls)
+    for (const [k, v] of __pendingPhoto.entries()) {
+      if (v.jobId !== jobId) continue;
+      if (v.objectUrl && String(v.objectUrl).startsWith("blob:")) _revokeBlobUrl(v.objectUrl);
+      __pendingPhoto.delete(k);
+    }
+    for (const it of items) {
+      __pendingPhoto.set(it.key, it);
+    }
+
+    // attach blob previews to loaded samples
+    const byId = new Map();
+    for (const [d, arr] of state.samplesByDate.entries()) {
+      for (const s of arr) byId.set(s.id, s);
+    }
+    for (const it of items) {
+      const s = byId.get(it.sampleId);
+      if (!s) continue;
+      if (!it.blob) continue;
+      const url = URL.createObjectURL(it.blob);
+      it.objectUrl = url;
+      _applyPendingToSample(s, it.role, url);
+    }
+  } catch (e) {
+    console.warn("Pending photo hydrate failed:", e);
+  }
+}
+
+async function enqueuePendingPhoto(jobId, sample, role, file) {
+  const key = _photoKey(jobId, sample.id, role);
+  // overwrite any previous pending photo for same slot
+  const prev = __pendingPhoto.get(key);
+  if (prev?.objectUrl && String(prev.objectUrl).startsWith("blob:")) _revokeBlobUrl(prev.objectUrl);
+
+  const blob = file instanceof Blob ? file : new Blob([file], { type: file?.type || "image/jpeg" });
+  const item = {
+    key,
+    jobId,
+    sampleId: sample.id,
+    role,
+    blob,
+    name: file?.name || `${role}.jpg`,
+    type: file?.type || "image/jpeg",
+    ts: Date.now(),
+  };
+  __pendingPhoto.set(key, item);
+  await photoqPut(item);
+
+  const url = URL.createObjectURL(blob);
+  item.objectUrl = url;
+  _applyPendingToSample(sample, role, url);
+}
+
+async function processPendingUploadForJob(jobId) {
+  const items = [...__pendingPhoto.values()].filter((x) => x.jobId === jobId).sort((a,b)=>a.ts-b.ts);
+  if (!items.length) {
+    setFoot("업로드 대기 사진이 없습니다.");
+    return;
+  }
+
+  let done = 0;
+  let fail = 0;
+
+  for (const it of items) {
+    const sample = (() => {
+      const dateEntries = [...state.samplesByDate.entries()];
+      for (const [, arr] of dateEntries) {
+        const s = arr.find((x) => x.id === it.sampleId);
+        if (s) return s;
+      }
+      return null;
+    })();
+    if (!sample) {
+      // stale queue item, drop it
+      await photoqDel(it.key);
+      if (it.objectUrl && String(it.objectUrl).startsWith("blob:")) _revokeBlobUrl(it.objectUrl);
+      __pendingPhoto.delete(it.key);
+      continue;
+    }
+
+    try {
+      setFoot(`사진 업로드 중... (${done + fail + 1}/${items.length})`);
+      const file = new File([it.blob], it.name || `${it.role}.jpg`, { type: it.type || "image/jpeg" });
+      await uploadAndBindPhoto(sample, it.role, file);
+      // success -> remove from queue
+      await photoqDel(it.key);
+      if (it.objectUrl && String(it.objectUrl).startsWith("blob:")) _revokeBlobUrl(it.objectUrl);
+      __pendingPhoto.delete(it.key);
+      done++;
+    } catch (e) {
+      console.error("Pending upload failed:", e);
+      fail++;
+      // keep queue item for retry
+    }
+    requestSoftRender();
+  }
+
+  if (fail === 0) setFoot(`업로드 완료 (${done}개)`);
+  else setFoot(`업로드 완료 ${done}개 / 실패 ${fail}개 (실패는 다음 저장에서 재시도됩니다)`);
+}
+
+
 /** =========================
  *  Upload
  *  ========================= */
@@ -1424,6 +1617,7 @@ async function uploadAndBindPhoto(sample, role, file) {
   }
 }
 
+
 function pickPhoto(sample, role, useCameraCapture) {
   const input = document.createElement("input");
   input.type = "file";
@@ -1431,38 +1625,72 @@ function pickPhoto(sample, role, useCameraCapture) {
   input.multiple = false;
   if (useCameraCapture) input.setAttribute("capture", "environment");
 
-  input.addEventListener("change", () => {
+  input.addEventListener("change", async () => {
     const file = input.files?.[0];
     if (!file) return;
 
-    const objectUrl = URL.createObjectURL(file);
-    openModal({
-      sample,
-      role,
-      roleLabel: roleLabel(role),
-      file,
-      objectUrl,
-      sourceLabel: useCameraCapture ? "촬영" : "앨범",
-    });
+    try {
+      // Deferred upload: store in IndexedDB queue and show local thumbnail immediately.
+      const jobId = state.job?.id;
+      if (!jobId) return;
+      await enqueuePendingPhoto(jobId, sample, role, file);
+      setFoot("사진이 추가되었습니다. 아래 '저장(업로드)'를 누르면 업로드됩니다.");
+      requestSoftRender();
+    } catch (e) {
+      console.error(e);
+      setFoot(`사진 임시저장 실패: ${e?.message || e}`);
+    }
   });
 
-
-  // 사진 선택/촬영 직후 pageshow/visibilitychange로 onAppResume가 연달아 호출되면
-  // 방금 띄운 "사진 확인" 모달이 닫히는 케이스가 있어, 잠깐 보호 플래그를 둔다.
+  // 촬영/앨범 선택 직후 pageshow/visibilitychange가 연달아 호출되는 환경이 있어 보호 플래그는 유지
   state.__photoPickerTS = Date.now();
-
   input.click();
 }
+
 
 /** =========================
  *  Delete / renumber
  *  ========================= */
+
+async function moveSampleToPosition(jobId, dateISO, sampleId, targetPos) {
+  const t = Math.max(1, parseInt(targetPos, 10) || 1);
+
+  const { data, error } = await supabase
+    .from(T_SAMPLES)
+    .select("id,p_index,created_at")
+    .eq("job_id", jobId)
+    .eq("measurement_date", dateISO)
+    .order("p_index", { ascending: true })
+    .order("created_at", { ascending: true })
+    .order("id", { ascending: true });
+  if (error) throw error;
+
+  const rows = data || [];
+  const ids = rows.map(r => r.id);
+  const fromIdx = ids.indexOf(sampleId);
+  if (fromIdx < 0) return;
+
+  const toIdx = Math.min(rows.length - 1, t - 1);
+  if (fromIdx === toIdx) return;
+
+  ids.splice(fromIdx, 1);
+  ids.splice(toIdx, 0, sampleId);
+
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i];
+    const newIndex = i + 1;
+    const { error: uErr } = await supabase.from(T_SAMPLES).update({ p_index: newIndex }).eq("id", id);
+    if (uErr) throw uErr;
+  }
+}
+
 async function renumberSamplesForDate(jobId, dateISO) {
   const { data, error } = await supabase
     .from(T_SAMPLES)
-    .select("id,created_at")
+    .select("id,p_index,created_at")
     .eq("job_id", jobId)
     .eq("measurement_date", dateISO)
+    .order("p_index", { ascending: true })
     .order("created_at", { ascending: true })
     .order("id", { ascending: true });
   if (error) throw error;
@@ -1664,7 +1892,10 @@ async function loadJob(job) {
     state.samplesByDate.set(state.activeDate, []);
   }
 
-  setFoot("불러오기가 완료되었습니다.");
+    // Load pending (deferred) photos for this job (IndexedDB)
+  await hydratePendingPhotosForJob(job.id);
+
+setFoot("불러오기가 완료되었습니다.");
   render();
 }
 
@@ -2152,7 +2383,7 @@ function renderJobWork() {
         },
       });
       titleNode = el("div", { class: "sampleTitle" }, [
-        el("span", { text: `P${s.p_index || "?"}.` }),
+        el("input", { class: "pIndexEdit", type: "number", min: 1, value: String(s.p_index || ""), style: "width:64px;", onblur: async (ev) => { const v = parseInt(ev.target.value, 10); if (!v || v === (s.p_index||0)) { ev.target.value = String(s.p_index || ""); return; } try { await moveSampleToPosition(state.job.id, s.measurement_date, s.id, v); setFoot("시료번호가 저장되었습니다."); await loadJob(state.job); } catch(e){ console.error(e); setFoot(`저장 실패: ${e?.message || e}`); ev.target.value = String(s.p_index || ""); } } }),
         inp,
       ]);
 
@@ -2185,7 +2416,7 @@ function renderJobWork() {
       sel.value = SCATTER_LOCATIONS.includes(s.sample_location) ? s.sample_location : "";
 
       titleNode = el("div", { class: "sampleTitle" }, [
-        el("span", { text: `P${s.p_index || "?"}.` }),
+        el("input", { class: "pIndexEdit", type: "number", min: 1, value: String(s.p_index || ""), style: "width:64px;", onblur: async (ev) => { const v = parseInt(ev.target.value, 10); if (!v || v === (s.p_index||0)) { ev.target.value = String(s.p_index || ""); return; } try { await moveSampleToPosition(state.job.id, s.measurement_date, s.id, v); setFoot("시료번호가 저장되었습니다."); await loadJob(state.job); } catch(e){ console.error(e); setFoot(`저장 실패: ${e?.message || e}`); ev.target.value = String(s.p_index || ""); } } }),
         sel,
       ]);
     }
@@ -2260,6 +2491,36 @@ function renderJobWork() {
     const row = el("div", { class: `sampleRow mode-${state.mode}` }, [left, right]);
     root.appendChild(createSwipeRow(row, () => deleteSample(s)));
   }
+  // ===== Sticky save/upload bar (deferred photo uploads) =====
+  try {
+    // make room so the bar doesn't cover the last sample row
+    root.style.paddingBottom = "86px";
+  } catch {}
+
+  const pendingN = pendingCountForJob(state.job.id);
+  const bar = el("div", {
+    class: "card",
+    style: "position:fixed; left:10px; right:10px; bottom:10px; z-index:9999; display:flex; align-items:center; justify-content:space-between; gap:10px; padding:12px;",
+  }, [
+    el("div", { text: pendingN ? `업로드 대기 사진 ${pendingN}개` : "업로드 대기 사진 없음" }),
+    el("button", {
+      class: "btn",
+      text: pendingN ? "저장(업로드)" : "저장(업로드)",
+      disabled: pendingN === 0,
+      onclick: async () => {
+        try {
+          await processPendingUploadForJob(state.job.id);
+        } catch (e) {
+          console.error(e);
+          setFoot(`업로드 실패: ${e?.message || e}`);
+        } finally {
+          requestSoftRender();
+        }
+      },
+    }),
+  ]);
+  root.appendChild(bar);
+
 }
 /** =========================
  *  Bootstrap
