@@ -450,6 +450,10 @@ async function initSupabase() {
 let __navSeq = 0;
 let __resumeHandling = false;
 
+// Session sync lock (avoid concurrent setSession causing AbortError)
+let __sessionSyncPromise = null;
+let __lastSessionSyncAt = 0;
+
 // ===== Navigation persistence (mobile Chrome tab discard 대응) =====
 const NAV_KEY = "airapp:lastNav:v1";
 function saveNavState() {
@@ -1805,19 +1809,47 @@ async function loadSession() {
   const sess = data?.session || null;
   state.user = sess?.user || null;
 
-  if (sess?.access_token && sess?.refresh_token) {
-    try {
-      await supabase.auth.setSession({
-        access_token: sess.access_token,
-        refresh_token: sess.refresh_token,
-      });
-    } catch (e) {
-      console.warn('setSession sync failed:', e);
+  // Avoid concurrent setSession() calls (supabase 내부 AbortController로 기존 sync가 abort될 수 있음)
+  const now = Date.now();
+  const shouldSync =
+    !!(sess?.access_token && sess?.refresh_token) &&
+    (!__lastSessionSyncAt || now - __lastSessionSyncAt > 15000);
+
+  if (shouldSync) {
+    if (!__sessionSyncPromise) {
+      __sessionSyncPromise = (async () => {
+        try {
+          await supabase.auth.setSession({
+            access_token: sess.access_token,
+            refresh_token: sess.refresh_token,
+          });
+          __lastSessionSyncAt = Date.now();
+        } catch (e) {
+          console.warn("setSession sync failed:", e);
+          // AbortError는 중복 호출/리줌 레이스에서 자주 뜸 → 1회만 짧게 딜레이 후 재시도
+          const msg = String(e?.name || "") + ":" + String(e?.message || "");
+          if (msg.includes("AbortError") || msg.includes("aborted")) {
+            try {
+              await new Promise((r) => setTimeout(r, 250));
+              await supabase.auth.setSession({
+                access_token: sess.access_token,
+                refresh_token: sess.refresh_token,
+              });
+              __lastSessionSyncAt = Date.now();
+            } catch (e2) {
+              console.warn("setSession retry failed:", e2);
+            }
+          }
+        } finally {
+          __sessionSyncPromise = null;
+        }
+      })();
     }
+    await __sessionSyncPromise;
   }
 
   if (state.user) {
-    setFoot('로그인되었습니다.');
+    setFoot("로그인되었습니다.");
   }
 }
 
@@ -2574,11 +2606,23 @@ function renderJobWork() {
         if (state.user) {
           // 1. 현장 목록 화면에 있었다면 목록 갱신
           if (state.company && state.mode && !state.job) {
-             await loadJobs();
+            await loadJobs();
+            // 모바일 복귀 직후 RLS 토큰이 아직 안 붙어 빈 목록이 오는 케이스가 있음 → 1회만 재시도
+            if (Array.isArray(state.jobs) && state.jobs.length === 0) {
+              await loadSession();
+              await new Promise((r) => setTimeout(r, 200));
+              await loadJobs();
+            }
           }
           // 2. 특정 현장 작업 화면에 있었다면 해당 현장 데이터 갱신
           else if (state.job) {
-             await loadJob(state.job);
+            await loadJob(state.job);
+            // dates/samples가 비었는데도 job이 유지되는 경우(세션 미동기화 등) → 1회만 재시도
+            if (Array.isArray(state.dates) && state.dates.length === 0) {
+              await loadSession();
+              await new Promise((r) => setTimeout(r, 200));
+              await loadJob(state.job);
+            }
           }
         }
 
