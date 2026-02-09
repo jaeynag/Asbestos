@@ -1798,6 +1798,7 @@ async function deleteJobAndRelated(job) {
 /** =========================
  *  Loaders
  *  ========================= */
+// ===== Session sync guard (avoid setSession abort race on resume) =====
 let __sessionSyncPromise = null;
 let __lastSessionSyncAt = 0;
 
@@ -1812,29 +1813,32 @@ async function loadSession() {
     state.user = sess?.user || null;
 
     const now = Date.now();
-    if (sess?.access_token && sess?.refresh_token && (now - __lastSessionSyncAt > 15000)) {
+    const canSync = now - __lastSessionSyncAt > 15_000; // avoid hammering setSession on resume storms
+
+    if (sess?.access_token && sess?.refresh_token && canSync) {
       __lastSessionSyncAt = now;
+      const doSet = async () => {
+        await supabase.auth.setSession({
+          access_token: sess.access_token,
+          refresh_token: sess.refresh_token,
+        });
+      };
+
       try {
-        try {
-          await supabase.auth.setSession({
-            access_token: sess.access_token,
-            refresh_token: sess.refresh_token,
-          });
-        } catch (e) {
-          // iOS/모바일 복귀 시 setSession 경합으로 AbortError가 나는 케이스가 있어 1회 재시도
-          const msg = String(e?.message || e);
-          if (e?.name === "AbortError" || /aborted|AbortError/i.test(msg)) {
-            await new Promise((r) => setTimeout(r, 250));
-            await supabase.auth.setSession({
-              access_token: sess.access_token,
-              refresh_token: sess.refresh_token,
-            });
-          } else {
-            throw e;
-          }
-        }
+        await doSet();
       } catch (e) {
-        console.warn("setSession sync failed:", e);
+        // AbortError: signal is aborted (supabase-js 내부 abort) → 짧게 쉬고 1회 재시도
+        const msg = String(e?.message || e || "");
+        if (e?.name === "AbortError" || /aborted/i.test(msg)) {
+          try {
+            await new Promise((r) => setTimeout(r, 250));
+            await doSet();
+          } catch (e2) {
+            console.warn("setSession sync failed:", e2);
+          }
+        } else {
+          console.warn("setSession sync failed:", e);
+        }
       }
     }
 
@@ -1842,14 +1846,14 @@ async function loadSession() {
   })();
 
   try {
-    return await __sessionSyncPromise;
+    await __sessionSyncPromise;
   } finally {
     __sessionSyncPromise = null;
   }
 }
 
-async function loadCompanies
-() {
+
+async function loadCompanies() {
   setFoot("회사 목록을 불러오는 중입니다...");
   state.companies = await fetchCompanies();
   setFoot("준비되었습니다.");
@@ -1863,60 +1867,73 @@ async function loadJobs() {
 }
 
 async function loadJob(job) {
-  // NOTE: 모바일 백그라운드 복귀 시 네트워크/세션 흔들림으로 fetch가 실패할 수 있음.
-  // 기존처럼 먼저 state를 비우면 "현장 화면이 통째로 빈 상태"로 떨어지므로,
-  // fetch가 끝까지 성공한 뒤에만 state를 교체하는 트랜잭션 방식으로 처리한다.
+  // NOTE: 모바일 백그라운드/복귀 타이밍에 fetch가 실패할 수 있어,
+  // state를 먼저 비우면 '현장 안 보임/열기 무반응'처럼 보일 수 있다.
+  // => 먼저 데이터를 다 받아온 후에만 state를 교체한다(Transactional).
 
   const prevActiveDate = state.activeDate;
 
   setFoot("시료 목록을 불러오는 중입니다...");
+
+  // 1) Fetch first (do not mutate state yet)
   const samples = await fetchSamples(job.id);
 
   const dates = Array.from(new Set(samples.map((s) => s.measurement_date))).sort();
-  const nextActiveDate = (prevActiveDate && dates.includes(prevActiveDate))
-    ? prevActiveDate
-    : (dates[0] || new Date().toISOString().slice(0, 10));
 
-  const tmpSamplesByDate = new Map();
-  for (const d of dates) tmpSamplesByDate.set(d, []);
-
+  // build new map
+  const nextSamplesByDate = new Map();
+  for (const d of dates) nextSamplesByDate.set(d, []);
   for (const s of samples) {
     s._photoState = {};
     s._photoPath = {};
     s._thumbUrl = {};
-    const bucket = tmpSamplesByDate.get(s.measurement_date);
+    s._thumbExp = {};
+    s._thumbLoading = {};
+    const bucket = nextSamplesByDate.get(s.measurement_date);
     if (bucket) bucket.push(s);
-    else tmpSamplesByDate.set(s.measurement_date, [s]);
+    else nextSamplesByDate.set(s.measurement_date, [s]);
   }
 
   const photos = await fetchPhotosForSamples(samples.map((s) => s.id));
   const byId = new Map(samples.map((s) => [s.id, s]));
+
+  // 2) Determine mode from job (source of truth)
+  const jobMode = (job?.mode === "scatter" ? "scatter" : "density");
+
   for (const p of photos) {
     const s = byId.get(p.sample_id);
     if (!s) continue;
 
     // 농도는 UI에서 사진 1장만 쓰므로, 과거 데이터의 role=single 은 measurement 로 정규화한다.
     const rawRole = p.role;
-    const role = (state.mode === "density" && rawRole === "single") ? "measurement" : rawRole;
+    const role = (jobMode === "density" && rawRole === "single") ? "measurement" : rawRole;
 
     // 이미 measurement 가 있으면 single 은 무시(중복 슬롯 방지)
-    if (state.mode === "density" && rawRole === "single" && s._photoPath["measurement"]) continue;
+    if (jobMode === "density" && rawRole === "single" && s._photoPath["measurement"]) continue;
 
     s._photoState[role] = p.state === "failed" ? "failed" : "done";
     s._photoPath[role] = p.storage_path;
-    // 썸네일은 비동기 생성되므로 soft render를 통해 UI 흔들림을 줄인다.
-    ensureThumbUrl(s, role);
   }
 
-  // ===== commit (state 교체는 여기서) =====
-  // 다른 현장/날짜를 여러 번 넘나들면 NAS 썸네일 blob URL이 누적될 수 있어 전환 시 정리
+  // 3) Choose active date
+  let nextActiveDate = (prevActiveDate && dates.includes(prevActiveDate))
+    ? prevActiveDate
+    : (dates[0] || new Date().toISOString().slice(0, 10));
+
+  if (!dates.includes(nextActiveDate)) {
+    dates.unshift(nextActiveDate);
+    nextSamplesByDate.set(nextActiveDate, nextSamplesByDate.get(nextActiveDate) || []);
+  }
+
+  // 4) Now swap state (and clean up old blob URLs only now)
   cleanupAllThumbBlobs();
   if (state.viewer.open) closeViewer();
 
+  state.mode = jobMode; // prevent mode mismatch (농도/비산 뒤섞임 방지)
   state.job = job;
   saveNavState();
 
-  state.samplesByDate = tmpSamplesByDate;
+  state.samplesByDate = nextSamplesByDate;
   state.dates = dates;
   state.activeDate = nextActiveDate;
 
@@ -1924,22 +1941,24 @@ async function loadJob(job) {
   state.addLoc = "";
   state.addTime = "";
 
-  // 날짜가 없으면 오늘을 탭으로 만들어서 추가 UX
-  if (!state.dates.includes(state.activeDate)) {
-    state.dates.unshift(state.activeDate);
-    state.samplesByDate.set(state.activeDate, []);
+  // 5) Ensure thumbnails after state swap (uses state.mode)
+  for (const s of samples) {
+    for (const [role, path] of Object.entries(s._photoPath || {})) {
+      if (!path) continue;
+      ensureThumbUrl(s, role);
+    }
   }
 
-  // Load pending (deferred) photos for this job (IndexedDB)
+  // 6) Load pending (deferred) photos for this job (IndexedDB) and attach previews
   await hydratePendingPhotosForJob(job.id);
 
   setFoot("불러오기가 완료되었습니다.");
   render();
 }
 
+
 /** =========================
  *  Render
-
  *  ========================= */
 function render() {
   closeSettings();
@@ -2242,16 +2261,7 @@ function renderJobSelect() {
           el("button", {
             class: "btn primary small",
             text: "열기",
-            onclick: async (ev) => {
-              ev.stopPropagation();
-              try {
-                await loadJob(j);
-              } catch (e) {
-                console.error(e);
-                setFoot(e?.message || String(e));
-                alert(e?.message || String(e));
-              }
-            },
+            onclick: async (ev) => { ev.stopPropagation(); try { await loadJob(j); } catch(e){ console.error(e); setFoot(e?.message || String(e)); alert(e?.message || String(e)); } },
           }),
         ]),
       ]);
@@ -2610,13 +2620,12 @@ function renderJobWork() {
         await loadSession();
 
         if (state.user) {
-          // 1. 현장 목록 화면에 있었다면 목록 갱신
+          // 화면 상태에 맞춰 최소 동기화
           if (state.company && state.mode && !state.job) {
-             await loadJobs();
-          }
-          // 2. 특정 현장 작업 화면에 있었다면 해당 현장 데이터 갱신
-          else if (state.job) {
-             await loadJob(state.job);
+            await loadJobs();
+          } else if (state.job) {
+            // NOTE: loadJob() 내부에서 job.mode로 state.mode를 맞춘다
+            await loadJob(state.job);
           }
         }
 
