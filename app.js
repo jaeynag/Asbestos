@@ -448,11 +448,6 @@ async function initSupabase() {
 }
 
 let __navSeq = 0;
-let __resumeHandling = false;
-
-// Session sync lock (avoid concurrent setSession causing AbortError)
-let __sessionSyncPromise = null;
-let __lastSessionSyncAt = 0;
 
 // ===== Navigation persistence (mobile Chrome tab discard 대응) =====
 const NAV_KEY = "airapp:lastNav:v1";
@@ -1794,63 +1789,64 @@ async function deleteJobAndRelated(job) {
     await loadJobs();
     render();
   } catch (e) {
-  console.error(e);
-  setFoot(`현장 삭제에 실패했습니다: ${e?.message || e}`);
-  alert(e?.message || String(e));
+    console.error(e);
+    setFoot(`현장 삭제에 실패했습니다: ${e?.message || e}`);
+    alert(e?.message || String(e));
   }
-  }
+}
+
 /** =========================
  *  Loaders
  *  ========================= */
+let __sessionSyncPromise = null;
+let __lastSessionSyncAt = 0;
+
 async function loadSession() {
-  // 일부 환경(iOS 홈화면/PC WebView)에서 getSession으로는 user가 보이는데,
-  // 내부 클라이언트에 access token 이 붙지 않아 RLS가 전부 비는 케이스가 있어 setSession으로 강제 동기화한다.
-  const { data } = await supabase.auth.getSession();
-  const sess = data?.session || null;
-  state.user = sess?.user || null;
+  // 중복 호출(visibilitychange/pageshow/onAuthStateChange)에서 setSession이 경합하며 AbortError가 발생할 수 있음.
+  // 동시에 여러 번 실행되지 않도록 mutex(단일 promise)로 직렬화한다.
+  if (__sessionSyncPromise) return __sessionSyncPromise;
 
-  // Avoid concurrent setSession() calls (supabase 내부 AbortController로 기존 sync가 abort될 수 있음)
-  const now = Date.now();
-  const shouldSync =
-    !!(sess?.access_token && sess?.refresh_token) &&
-    (!__lastSessionSyncAt || now - __lastSessionSyncAt > 15000);
+  __sessionSyncPromise = (async () => {
+    const { data } = await supabase.auth.getSession();
+    const sess = data?.session || null;
+    state.user = sess?.user || null;
 
-  if (shouldSync) {
-    if (!__sessionSyncPromise) {
-      __sessionSyncPromise = (async () => {
+    if (sess?.access_token && sess?.refresh_token) {
+      const now = Date.now();
+      const allowSync = (now - __lastSessionSyncAt) > 15000; // 15초 이내 재동기화 방지
+      if (allowSync) {
+        __lastSessionSyncAt = now;
         try {
           await supabase.auth.setSession({
             access_token: sess.access_token,
             refresh_token: sess.refresh_token,
           });
-          __lastSessionSyncAt = Date.now();
         } catch (e) {
+          // setSession은 내부적으로 AbortController를 쓰고, 경합 시 AbortError가 날 수 있음.
+          const msg = String(e?.name || "") + " " + String(e?.message || "");
           console.warn("setSession sync failed:", e);
-          // AbortError는 중복 호출/리줌 레이스에서 자주 뜸 → 1회만 짧게 딜레이 후 재시도
-          const msg = String(e?.name || "") + ":" + String(e?.message || "");
-          if (msg.includes("AbortError") || msg.includes("aborted")) {
+          if (/AbortError/i.test(msg) || /aborted/i.test(msg)) {
+            // 짧게 쉬고 1회 재시도
+            await new Promise((r) => setTimeout(r, 250));
             try {
-              await new Promise((r) => setTimeout(r, 250));
               await supabase.auth.setSession({
                 access_token: sess.access_token,
                 refresh_token: sess.refresh_token,
               });
-              __lastSessionSyncAt = Date.now();
             } catch (e2) {
               console.warn("setSession retry failed:", e2);
             }
           }
-        } finally {
-          __sessionSyncPromise = null;
         }
-      })();
+      }
     }
-    await __sessionSyncPromise;
-  }
 
-  if (state.user) {
-    setFoot("로그인되었습니다.");
-  }
+    if (state.user) setFoot("로그인되었습니다.");
+  })().finally(() => {
+    __sessionSyncPromise = null;
+  });
+
+  return __sessionSyncPromise;
 }
 
 async function loadCompanies() {
@@ -1867,25 +1863,22 @@ async function loadJobs() {
 }
 
 async function loadJob(job) {
-  // NOTE:
-  // 기존 loadJob은 fetch 실패(네트워크/세션/RLS 등) 중간에 state를 먼저 비워버려서
-  // "백그라운드 복귀 후 현장이 안 보임"처럼 보이는 증상을 만들 수 있었다.
-  // → 성공적으로 데이터를 받아온 뒤에만 state를 교체하도록 순서를 바꾼다.
-
+  // 백그라운드/복귀 타이밍에 네트워크/세션 동기화가 흔들리면 fetch가 실패할 수 있다.
+  // 기존 데이터(state)를 먼저 비워버리면 "현장이 안 보임"으로 떨어지므로,
+  // 데이터 fetch가 성공한 뒤에만 state를 교체한다(트랜잭션 방식).
   const prevActiveDate = state.activeDate;
 
   setFoot("시료 목록을 불러오는 중입니다...");
   const samples = await fetchSamples(job.id);
 
-  // photos는 sample id가 필요하므로 samples fetch 이후에만 가능
-  const sampleIds = (samples || []).map((s) => s.id);
-  const photos = await fetchPhotosForSamples(sampleIds);
+  const photos = samples.length
+    ? await fetchPhotosForSamples(samples.map((s) => s.id))
+    : [];
 
-  // 데이터 fetch가 성공했으니, 이제 전환/리로드에 필요한 정리 수행
+  // 여기까지 성공했을 때만 화면 상태 교체
   cleanupAllThumbBlobs();
   if (state.viewer.open) closeViewer();
 
-  // state 교체(이 시점부터 화면 데이터가 바뀜)
   state.job = job;
   saveNavState();
   state.samplesByDate = new Map();
@@ -1895,14 +1888,14 @@ async function loadJob(job) {
   state.addLoc = "";
   state.addTime = "";
 
-  const dates = Array.from(new Set((samples || []).map((s) => s.measurement_date))).sort();
+  const dates = Array.from(new Set(samples.map((s) => s.measurement_date))).sort();
   state.dates = dates;
   state.activeDate = (prevActiveDate && dates.includes(prevActiveDate))
     ? prevActiveDate
     : (dates[0] || new Date().toISOString().slice(0, 10));
 
   for (const d of dates) state.samplesByDate.set(d, []);
-  for (const s of (samples || [])) {
+  for (const s of samples) {
     s._photoState = {};
     s._photoPath = {};
     s._thumbUrl = {};
@@ -1911,8 +1904,8 @@ async function loadJob(job) {
     else state.samplesByDate.set(s.measurement_date, [s]);
   }
 
-  const byId = new Map((samples || []).map((s) => [s.id, s]));
-  for (const p of (photos || [])) {
+  const byId = new Map(samples.map((s) => [s.id, s]));
+  for (const p of photos) {
     const s = byId.get(p.sample_id);
     if (!s) continue;
 
@@ -1930,15 +1923,18 @@ async function loadJob(job) {
 
   // 날짜가 없으면 오늘을 탭으로 만들어서 추가 UX
   if (!state.dates.includes(state.activeDate)) {
-    state.dates.unshift(state.activeDate);
-    state.samplesByDate.set(state.activeDate, []);
+    state.dates = [state.activeDate, ...state.dates];
+    if (!state.samplesByDate.has(state.activeDate)) state.samplesByDate.set(state.activeDate, []);
   }
 
-  // Load pending (deferred) photos for this job (IndexedDB)
-  await hydratePendingPhotosForJob(job.id);
+  // deferred photo queue thumbnails (있으면)
+  try {
+    await hydratePendingPhotosForJob(job.id);
+  } catch (e) {
+    console.warn("hydrate pending photos failed:", e);
+  }
 
-  setFoot("불러오기가 완료되었습니다.");
-  render();
+  setFoot("준비되었습니다.");
 }
 
 /** =========================
@@ -2580,11 +2576,11 @@ function renderJobWork() {
     render();
 
     // ===== iOS 홈화면(PWA) 백그라운드 복귀 시 터치/키 씹힘 방어 =====
+    let __resumeHandling = false;
     async function onAppResume() {
+      if (__resumeHandling) return;
+      __resumeHandling = true;
       try {
-        if (__resumeHandling) return;
-        __resumeHandling = true;
-
         // 떠있는 오버레이/메뉴가 터치 막는 케이스 방지
         closeSettings();
         if (typeof __openSwipeRow !== "undefined" && __openSwipeRow) closeSwipeRow(__openSwipeRow);
@@ -2606,23 +2602,11 @@ function renderJobWork() {
         if (state.user) {
           // 1. 현장 목록 화면에 있었다면 목록 갱신
           if (state.company && state.mode && !state.job) {
-            await loadJobs();
-            // 모바일 복귀 직후 RLS 토큰이 아직 안 붙어 빈 목록이 오는 케이스가 있음 → 1회만 재시도
-            if (Array.isArray(state.jobs) && state.jobs.length === 0) {
-              await loadSession();
-              await new Promise((r) => setTimeout(r, 200));
-              await loadJobs();
-            }
+             await loadJobs();
           }
           // 2. 특정 현장 작업 화면에 있었다면 해당 현장 데이터 갱신
           else if (state.job) {
-            await loadJob(state.job);
-            // dates/samples가 비었는데도 job이 유지되는 경우(세션 미동기화 등) → 1회만 재시도
-            if (Array.isArray(state.dates) && state.dates.length === 0) {
-              await loadSession();
-              await new Promise((r) => setTimeout(r, 200));
-              await loadJob(state.job);
-            }
+             await loadJob(state.job);
           }
         }
 
@@ -2631,11 +2615,9 @@ function renderJobWork() {
         console.warn("resume cleanup/fetch failed:", e);
         setFoot("동기화 실패(네트워크 확인)");
         render();
-      }
-      finally {
+      } finally {
         __resumeHandling = false;
       }
-
     }
 
     document.addEventListener("visibilitychange", () => {
