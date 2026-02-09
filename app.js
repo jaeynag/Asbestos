@@ -1201,17 +1201,47 @@ async function nasFetchBlobUrl(relPath) {
   if (!NAS_GATEWAY_URL) throw new Error("NAS_GATEWAY_URL이 설정되지 않았습니다.");
   const rel = String(relPath || "").replace(/^\/+/, "");
   const enc = rel.split("/").map(encodeURIComponent).join("/");
-  const url = joinUrl(NAS_GATEWAY_URL, `object/authenticated/${enc}`);
+  const baseUrl = joinUrl(NAS_GATEWAY_URL, `object/authenticated/${enc}`);
 
   const auth = await getNasAuthorization();
-  const resp = await fetch(url, { method: "GET", headers: auth ? { Authorization: auth } : undefined });
-  if (!resp.ok) {
-    const msg = await resp.text().catch(() => "");
-    throw new Error(`NAS 파일 조회 실패 (${resp.status}): ${msg || "요청이 거부되었습니다."}`);
+  const headers = auth ? { Authorization: auth, Accept: "image/*" } : { Accept: "image/*" };
+
+  const attempt = async (url) => {
+    const resp = await fetch(url, {
+      method: "GET",
+      headers,
+      cache: "no-store",
+      // 쿠키 기반이 아니라 Authorization만 쓰는 구조라 credentials는 굳이 필요 없음
+      credentials: "omit",
+    });
+    if (!resp.ok) {
+      const msg = await resp.text().catch(() => "");
+      throw new Error(`NAS 파일 조회 실패 (${resp.status}): ${msg || "요청이 거부되었습니다."}`);
+    }
+    const blob = await resp.blob();
+    return URL.createObjectURL(blob);
+  };
+
+  try {
+    return await attempt(baseUrl);
+  } catch (e) {
+    // 모바일 백그라운드 복귀 직후(특히 HTTP/2) 간헐적으로 첫 요청이 TypeError/Failed to fetch로 죽는 케이스가 있음 → 1회만 재시도
+    const msg = String(e?.message || e || "");
+    const retryable =
+      e?.name === "TypeError" ||
+      msg.includes("Failed to fetch") ||
+      msg.includes("NetworkError") ||
+      msg.includes("ERR_HTTP2") ||
+      msg.includes("HTTP2");
+
+    if (!retryable) throw e;
+
+    await new Promise((r) => setTimeout(r, 250));
+    const sep = baseUrl.includes("?") ? "&" : "?";
+    return await attempt(baseUrl + sep + "__r=" + Date.now());
   }
-  const blob = await resp.blob();
-  return URL.createObjectURL(blob);
 }
+
 
 /** =========================
  *  Thumbnails
@@ -1798,55 +1828,27 @@ async function deleteJobAndRelated(job) {
 /** =========================
  *  Loaders
  *  ========================= */
-let __sessionSyncPromise = null;
-let __lastSessionSyncAt = 0;
-
 async function loadSession() {
-  // 중복 호출(visibilitychange/pageshow/onAuthStateChange)에서 setSession이 경합하며 AbortError가 발생할 수 있음.
-  // 동시에 여러 번 실행되지 않도록 mutex(단일 promise)로 직렬화한다.
-  if (__sessionSyncPromise) return __sessionSyncPromise;
+  // 일부 환경(iOS 홈화면/PC WebView)에서 getSession으로는 user가 보이는데,
+  // 내부 클라이언트에 access token 이 붙지 않아 RLS가 전부 비는 케이스가 있어 setSession으로 강제 동기화한다.
+  const { data } = await supabase.auth.getSession();
+  const sess = data?.session || null;
+  state.user = sess?.user || null;
 
-  __sessionSyncPromise = (async () => {
-    const { data } = await supabase.auth.getSession();
-    const sess = data?.session || null;
-    state.user = sess?.user || null;
-
-    if (sess?.access_token && sess?.refresh_token) {
-      const now = Date.now();
-      const allowSync = (now - __lastSessionSyncAt) > 15000; // 15초 이내 재동기화 방지
-      if (allowSync) {
-        __lastSessionSyncAt = now;
-        try {
-          await supabase.auth.setSession({
-            access_token: sess.access_token,
-            refresh_token: sess.refresh_token,
-          });
-        } catch (e) {
-          // setSession은 내부적으로 AbortController를 쓰고, 경합 시 AbortError가 날 수 있음.
-          const msg = String(e?.name || "") + " " + String(e?.message || "");
-          console.warn("setSession sync failed:", e);
-          if (/AbortError/i.test(msg) || /aborted/i.test(msg)) {
-            // 짧게 쉬고 1회 재시도
-            await new Promise((r) => setTimeout(r, 250));
-            try {
-              await supabase.auth.setSession({
-                access_token: sess.access_token,
-                refresh_token: sess.refresh_token,
-              });
-            } catch (e2) {
-              console.warn("setSession retry failed:", e2);
-            }
-          }
-        }
-      }
+  if (sess?.access_token && sess?.refresh_token) {
+    try {
+      await supabase.auth.setSession({
+        access_token: sess.access_token,
+        refresh_token: sess.refresh_token,
+      });
+    } catch (e) {
+      console.warn('setSession sync failed:', e);
     }
+  }
 
-    if (state.user) setFoot("로그인되었습니다.");
-  })().finally(() => {
-    __sessionSyncPromise = null;
-  });
-
-  return __sessionSyncPromise;
+  if (state.user) {
+    setFoot('로그인되었습니다.');
+  }
 }
 
 async function loadCompanies() {
@@ -1863,22 +1865,10 @@ async function loadJobs() {
 }
 
 async function loadJob(job) {
-  // 백그라운드/복귀 타이밍에 네트워크/세션 동기화가 흔들리면 fetch가 실패할 수 있다.
-  // 기존 데이터(state)를 먼저 비워버리면 "현장이 안 보임"으로 떨어지므로,
-  // 데이터 fetch가 성공한 뒤에만 state를 교체한다(트랜잭션 방식).
+  // 다른 현장/날짜를 여러 번 넘나들면 NAS 썸네일 blob URL이 누적될 수 있어 전환 시 정리
   const prevActiveDate = state.activeDate;
-
-  setFoot("시료 목록을 불러오는 중입니다...");
-  const samples = await fetchSamples(job.id);
-
-  const photos = samples.length
-    ? await fetchPhotosForSamples(samples.map((s) => s.id))
-    : [];
-
-  // 여기까지 성공했을 때만 화면 상태 교체
   cleanupAllThumbBlobs();
   if (state.viewer.open) closeViewer();
-
   state.job = job;
   saveNavState();
   state.samplesByDate = new Map();
@@ -1887,6 +1877,9 @@ async function loadJob(job) {
   state.addOpen = false;
   state.addLoc = "";
   state.addTime = "";
+
+  setFoot("시료 목록을 불러오는 중입니다...");
+  const samples = await fetchSamples(job.id);
 
   const dates = Array.from(new Set(samples.map((s) => s.measurement_date))).sort();
   state.dates = dates;
@@ -1899,11 +1892,13 @@ async function loadJob(job) {
     s._photoState = {};
     s._photoPath = {};
     s._thumbUrl = {};
+    // JS에서 TypeScript의 non-null assertion(!) 문법은 파싱 에러를 내므로 안전하게 처리
     const bucket = state.samplesByDate.get(s.measurement_date);
     if (bucket) bucket.push(s);
     else state.samplesByDate.set(s.measurement_date, [s]);
   }
 
+  const photos = await fetchPhotosForSamples(samples.map((s) => s.id));
   const byId = new Map(samples.map((s) => [s.id, s]));
   for (const p of photos) {
     const s = byId.get(p.sample_id);
@@ -1923,18 +1918,15 @@ async function loadJob(job) {
 
   // 날짜가 없으면 오늘을 탭으로 만들어서 추가 UX
   if (!state.dates.includes(state.activeDate)) {
-    state.dates = [state.activeDate, ...state.dates];
-    if (!state.samplesByDate.has(state.activeDate)) state.samplesByDate.set(state.activeDate, []);
+    state.dates.unshift(state.activeDate);
+    state.samplesByDate.set(state.activeDate, []);
   }
 
-  // deferred photo queue thumbnails (있으면)
-  try {
-    await hydratePendingPhotosForJob(job.id);
-  } catch (e) {
-    console.warn("hydrate pending photos failed:", e);
-  }
+    // Load pending (deferred) photos for this job (IndexedDB)
+  await hydratePendingPhotosForJob(job.id);
 
-  setFoot("준비되었습니다.");
+setFoot("불러오기가 완료되었습니다.");
+  render();
 }
 
 /** =========================
@@ -2576,10 +2568,7 @@ function renderJobWork() {
     render();
 
     // ===== iOS 홈화면(PWA) 백그라운드 복귀 시 터치/키 씹힘 방어 =====
-    let __resumeHandling = false;
     async function onAppResume() {
-      if (__resumeHandling) return;
-      __resumeHandling = true;
       try {
         // 떠있는 오버레이/메뉴가 터치 막는 케이스 방지
         closeSettings();
@@ -2615,8 +2604,6 @@ function renderJobWork() {
         console.warn("resume cleanup/fetch failed:", e);
         setFoot("동기화 실패(네트워크 확인)");
         render();
-      } finally {
-        __resumeHandling = false;
       }
     }
 
